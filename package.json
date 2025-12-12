@@ -1,0 +1,40 @@
+{
+  "name": "jstar-code-review",
+  "version": "1.0.0",
+  "description": "J Star - AI-Powered Code Review Bot using Vercel AI SDK",
+  "type": "module",
+  "main": "src/orchestrator.ts",
+  "scripts": {
+    "review": "tsx src/orchestrator.ts",
+    "test:local": "dotenv -e .env.local -- tsx src/orchestrator.ts",
+    "test:dry": "dotenv -e .env.local -- tsx src/test-local.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "code-review",
+    "ai",
+    "github-actions",
+    "llm",
+    "pr-review"
+  ],
+  "author": "J Star Studios",
+  "license": "MIT",
+  "dependencies": {
+    "@ai-sdk/groq": "^2.0.33",
+    "@ai-sdk/openai": "^2.0.85",
+    "@octokit/rest": "^21.0.0",
+    "ai": "^5.0.112",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "dotenv-cli": "^7.4.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
