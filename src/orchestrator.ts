@@ -149,55 +149,44 @@ No critical files detected. Skipping deep review to save tokens. 🎉
 }
 
 function formatReviewComment(review: JStarReviewResult): string {
-    const scoreEmoji = review.summary.risk_score >= 80 ? '🟢' : review.summary.risk_score >= 50 ? '🟡' : '🔴';
-    const verdictEmojiMap: Record<Verdict, string> = {
-        APPROVE: '✅',
-        REQUEST_CHANGES: '❌',
-        COMMENT: '💬',
-    };
-    const verdictEmoji = verdictEmojiMap[review.summary.verdict];
+    const score = review.summary.risk_score;
+    const icon = score > 80 ? '🟢' : score > 50 ? '🟡' : '🔴';
 
-    let md = `## ${scoreEmoji} J Star Review
+    // 1. The Executive Summary Table
+    let md = `# ${icon} J Star Code Audit\n\n`;
+    md += `| Metric | Result | Status |\n`;
+    md += `| :--- | :--- | :--- |\n`;
+    md += `| **Risk Score** | ${score}/100 | ${score > 80 ? 'Safe' : 'Risky'} |\n`;
+    md += `| **Verdict** | ${review.summary.verdict} | ${review.summary.verdict === 'APPROVE' ? '✅' : '⚠️'} |\n`;
+    md += `| **Tone** | ${review.summary.tone.toUpperCase()} | 🤖 |\n\n`;
 
-**Verdict:** ${verdictEmoji} ${review.summary.verdict} | **Safety Score:** ${review.summary.risk_score}/100
+    md += `---\n\n`;
 
----
-
-`;
+    // 2. The Detailed Findings
+    md += `## 🔍 Deep Dive Findings\n\n`;
 
     if (review.findings.length === 0) {
-        md += `### 🎉 No Issues Found\n\nCode looks clean! Ship it. 🚀\n`;
-        return md;
+        md += `*No critical issues found. Great job!* ✨\n`;
     }
 
-    // Group findings by severity
-    const grouped: Record<string, Finding[]> = {
-        CRITICAL: review.findings.filter((f: Finding) => f.severity === 'CRITICAL'),
-        HIGH: review.findings.filter((f: Finding) => f.severity === 'HIGH'),
-        MEDIUM: review.findings.filter((f: Finding) => f.severity === 'MEDIUM'),
-        NITPICK: review.findings.filter((f: Finding) => f.severity === 'NITPICK'),
-    };
+    for (const finding of review.findings) {
+        const severityIcon = finding.severity === 'CRITICAL' ? '🚨' : finding.severity === 'HIGH' ? '🔶' : '🔹';
 
-    for (const [severity, findings] of Object.entries(grouped)) {
-        if (findings.length === 0) continue;
+        md += `### ${severityIcon} ${finding.severity}: ${finding.file}\n`;
+        md += `**Category:** \`${finding.category}\` | **Line:** ${finding.line}\n\n`;
 
-        const icon = severity === 'CRITICAL' ? '🚨' : severity === 'HIGH' ? '⚠️' : severity === 'MEDIUM' ? '📝' : '💅';
-        md += `### ${icon} ${severity} (${findings.length})\n\n`;
+        // The "Impact" section helps believability
+        md += `> ${finding.message}\n\n`;
 
-        for (const finding of findings) {
-            md += `#### \`${finding.file}\` — Line ${finding.line} [\`${finding.category}\`]\n\n`;
-            md += `> ${finding.message}\n\n`;
-
-            if (finding.fix_prompt) {
-                md += `<details>\n<summary>🤖 AI Fix Prompt</summary>\n\n\`\`\`text\n${finding.fix_prompt}\n\`\`\`\n\n</details>\n\n`;
-            }
-
-            md += `---\n\n`;
+        if (finding.fix_prompt) {
+            md += `<details>\n<summary><b>🛠️ Click to Copy AI Fix Prompt</b></summary>\n\n`;
+            md += `\`\`\`text\n${finding.fix_prompt}\n\`\`\`\n`;
+            md += `</details>\n\n`;
         }
+        md += `---\n`;
     }
 
-    md += `\n<sub>Powered by J Star Sentinel 🌟</sub>`;
-
+    md += `\n*Powered by J Star Sentinel & Kimi-k2* ⚡`;
     return md;
 }
 
