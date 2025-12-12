@@ -2,9 +2,11 @@
 // The Runner: J Star Code Review Orchestrator
 // Uses the Vercel AI SDK for structured output with Zod validation.
 
-import { generateObject } from 'ai';
+import { generateObject, generateText } from 'ai';
 import { createGroq } from '@ai-sdk/groq';
 import { Octokit } from '@octokit/rest';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { TRIAGE_SYSTEM_PROMPT, ANALYST_SYSTEM_PROMPT, buildAnalystUserPrompt } from './prompts.js';
 import {
@@ -14,7 +16,6 @@ import {
     type TriageResult,
     type JStarReviewResult,
     type Finding,
-    type Verdict,
 } from './types.js';
 
 // Initialize Groq provider
@@ -23,8 +24,8 @@ const groq = createGroq({
 });
 
 // Model configuration from env
-const TRIAGE_MODEL = process.env.TRIAGE_MODEL || 'llama-3.1-8b-instant';
-const ANALYST_MODEL = process.env.ANALYST_MODEL || 'llama-3.3-70b-versatile';
+const TRIAGE_MODEL = process.env.TRIAGE_MODEL || 'openai/gpt-oss-120b';
+const ANALYST_MODEL = process.env.ANALYST_MODEL || 'moonshotai/kimi-k2-instruct-0905';
 
 // ============================================================
 // ENVIRONMENT VALIDATION
@@ -66,6 +67,103 @@ function initGitHub(env: ReturnType<typeof validateEnv>): GitHubContext {
 }
 
 // ============================================================
+// ARCHITECTURE CONTEXT LOADING
+// ============================================================
+
+function loadArchitectureContext(): string {
+    let contextDocs = "";
+    const docs = [
+        { name: 'ARCHITECTURE', file: '.jstar/architecture.md' },
+        { name: 'CODING RULES', file: '.jstar/rules.md' }
+    ];
+
+    for (const doc of docs) {
+        const filePath = path.join(process.cwd(), doc.file);
+        if (fs.existsSync(filePath)) {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            contextDocs += `\n### ${doc.name}:\n${content}\n`;
+            console.log(`📖 Loaded context: ${doc.file}`);
+        }
+    }
+    return contextDocs;
+}
+
+// ============================================================
+// DOC DRIFT DETECTION
+// ============================================================
+
+interface DocFinding {
+    file: string;
+    line: number;
+    severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'NITPICK';
+    category: string;
+    message: string;
+    fix_prompt?: string;
+}
+
+async function checkDocDrift(prFiles: string[]): Promise<DocFinding[]> {
+    const findings: DocFinding[] = [];
+
+    // 1. Identify which features were touched
+    const touchedFeatures = new Set<string>();
+    for (const file of prFiles) {
+        // Regex to capture "src/features/FeatureName"
+        const match = file.match(/src\/features\/([^/]+)/);
+        if (match) {
+            touchedFeatures.add(match[1]);
+        }
+    }
+
+    if (touchedFeatures.size === 0) {
+        console.log('📚 No feature folders touched, skipping doc drift check.');
+        return findings;
+    }
+
+    console.log(`📚 Checking documentation for ${touchedFeatures.size} touched features...`);
+
+    // 2. Check if docs exist/updated for those features
+    for (const feature of touchedFeatures) {
+        const hasDocUpdate = prFiles.some(f => f.includes(`docs/features/${feature}`));
+
+        if (!hasDocUpdate) {
+            console.log(`   ⚠️ Missing docs for: ${feature}`);
+
+            // 3. Generate a documentation stub using AI
+            try {
+                const { text: docDraft } = await generateText({
+                    model: groq(TRIAGE_MODEL),
+                    system: "You are a Technical Writer. Generate a brief, concise markdown documentation stub. Keep it under 200 words.",
+                    prompt: `The developer updated the feature "${feature}" in src/features/${feature}/ but forgot to document it.\n\nWrite a concise markdown template for docs/features/${feature}.md explaining:\n1. What this feature does (placeholder)\n2. Key files\n3. Usage notes\n\nKeep it minimal and professional.`,
+                });
+
+                findings.push({
+                    file: `docs/features/${feature}.md`,
+                    line: 1,
+                    severity: 'HIGH',
+                    category: 'DOCUMENTATION',
+                    message: `🚨 **Doc Drift Detected:** You modified \`src/features/${feature}/\` but didn't update the documentation in \`docs/features/\`.`,
+                    fix_prompt: `Create file docs/features/${feature}.md with this content:\n\n${docDraft}`
+                });
+            } catch (e) {
+                // If AI generation fails, still report the finding without the draft
+                findings.push({
+                    file: `docs/features/${feature}.md`,
+                    line: 1,
+                    severity: 'HIGH',
+                    category: 'DOCUMENTATION',
+                    message: `🚨 **Doc Drift Detected:** You modified \`src/features/${feature}/\` but didn't update the documentation in \`docs/features/\`.`,
+                    fix_prompt: `Create documentation for the ${feature} feature in docs/features/${feature}.md`
+                });
+            }
+        } else {
+            console.log(`   ✅ Docs updated for: ${feature}`);
+        }
+    }
+
+    return findings;
+}
+
+// ============================================================
 // PR DIFF FETCHING
 // ============================================================
 
@@ -77,7 +175,6 @@ async function fetchPRDiff(ctx: GitHubContext): Promise<string> {
         mediaType: { format: 'diff' },
     });
 
-    // The diff comes as a string when mediaType is 'diff'
     return response.data as unknown as string;
 }
 
@@ -120,13 +217,18 @@ Classify this PR and identify critical files to audit.
 // DEEP REVIEW (Step 2: Expensive Analyst)
 // ============================================================
 
-async function runDeepReview(filesToAudit: string[], diff: string): Promise<JStarReviewResult> {
+async function runDeepReview(filesToAudit: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
     console.log(`🧠 Running Deep Review on ${filesToAudit.length} files with ${ANALYST_MODEL}...`);
+
+    // Inject architecture context into the system prompt
+    const enhancedSystemPrompt = architectureContext
+        ? `${ANALYST_SYSTEM_PROMPT}\n\n--- PROJECT CONTEXT ---\n${architectureContext}`
+        : ANALYST_SYSTEM_PROMPT;
 
     const { object } = await generateObject({
         model: groq(ANALYST_MODEL),
         schema: JStarReviewSchema,
-        system: ANALYST_SYSTEM_PROMPT,
+        system: enhancedSystemPrompt,
         prompt: buildAnalystUserPrompt(filesToAudit, diff),
     });
 
@@ -148,25 +250,51 @@ No critical files detected. Skipping deep review to save tokens. 🎉
 `;
 }
 
-function formatReviewComment(review: JStarReviewResult): string {
-    const score = review.summary.risk_score;
+function formatReviewComment(review: JStarReviewResult, docFindings: DocFinding[]): string {
+    const allFindings = [...docFindings, ...review.findings];
+    const hasDocIssues = docFindings.length > 0;
+
+    // Adjust score if there are doc issues
+    const score = hasDocIssues
+        ? Math.min(review.summary.risk_score, 60) // Penalty for missing docs
+        : review.summary.risk_score;
+
     const icon = score > 80 ? '🟢' : score > 50 ? '🟡' : '🔴';
+    const verdict = hasDocIssues ? 'REQUEST_CHANGES' : review.summary.verdict;
 
     // 1. The Executive Summary Table
     let md = `# ${icon} J Star Code Audit\n\n`;
     md += `| Metric | Result | Status |\n`;
     md += `| :--- | :--- | :--- |\n`;
     md += `| **Risk Score** | ${score}/100 | ${score > 80 ? 'Safe' : 'Risky'} |\n`;
-    md += `| **Verdict** | ${review.summary.verdict} | ${review.summary.verdict === 'APPROVE' ? '✅' : '⚠️'} |\n`;
-    md += `| **Tone** | ${review.summary.tone.toUpperCase()} | 🤖 |\n\n`;
+    md += `| **Verdict** | ${verdict} | ${verdict === 'APPROVE' ? '✅' : '⚠️'} |\n`;
+    md += `| **Tone** | ${review.summary.tone.toUpperCase()} | 🤖 |\n`;
+    if (hasDocIssues) {
+        md += `| **Doc Drift** | ${docFindings.length} missing | 📚 |\n`;
+    }
+    md += `\n---\n\n`;
 
-    md += `---\n\n`;
+    // 2. Documentation Findings (if any)
+    if (docFindings.length > 0) {
+        md += `## 📚 Documentation Issues\n\n`;
+        for (const finding of docFindings) {
+            md += `### 🔶 ${finding.severity}: ${finding.file}\n`;
+            md += `**Category:** \`${finding.category}\`\n\n`;
+            md += `> ${finding.message}\n\n`;
+            if (finding.fix_prompt) {
+                md += `<details>\n<summary><b>🛠️ Click to Copy AI Fix Prompt</b></summary>\n\n`;
+                md += `\`\`\`text\n${finding.fix_prompt}\n\`\`\`\n`;
+                md += `</details>\n\n`;
+            }
+            md += `---\n`;
+        }
+    }
 
-    // 2. The Detailed Findings
-    md += `## 🔍 Deep Dive Findings\n\n`;
+    // 3. Code Findings
+    md += `## 🔍 Code Review Findings\n\n`;
 
     if (review.findings.length === 0) {
-        md += `*No critical issues found. Great job!* ✨\n`;
+        md += `*No critical code issues found. Great job!* ✨\n`;
     }
 
     for (const finding of review.findings) {
@@ -174,8 +302,6 @@ function formatReviewComment(review: JStarReviewResult): string {
 
         md += `### ${severityIcon} ${finding.severity}: ${finding.file}\n`;
         md += `**Category:** \`${finding.category}\` | **Line:** ${finding.line}\n\n`;
-
-        // The "Impact" section helps believability
         md += `> ${finding.message}\n\n`;
 
         if (finding.fix_prompt) {
@@ -209,7 +335,7 @@ async function postComment(ctx: GitHubContext, body: string): Promise<void> {
 // ============================================================
 
 async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket') {
-    if (!ctx.commentId) return; // Only works if triggered by a comment
+    if (!ctx.commentId) return;
 
     try {
         await ctx.octokit.reactions.createForIssueComment({
@@ -241,30 +367,49 @@ async function main() {
 
     console.log(`📦 Reviewing PR #${ctx.prNumber} in ${ctx.owner}/${ctx.repo}\n`);
 
-    // 2. Fetch PR data
+    // 2. Load architecture context (if available)
+    const architectureContext = loadArchitectureContext();
+
+    // 3. Fetch PR data
     const [diff, files] = await Promise.all([
         fetchPRDiff(ctx),
         fetchPRFiles(ctx),
     ]);
     console.log(`📄 Found ${files.length} changed files (${diff.length} chars diff)\n`);
 
-    // 3. Run Triage
+    // 4. Run Triage
     const triage = await runTriage(files, diff.length);
     console.log(`\n📊 Triage Result:`, JSON.stringify(triage, null, 2), '\n');
 
-    // 4. Check if we should skip deep review
-    if (triage.files_to_audit.length === 0) {
+    // 5. Check Doc Drift (NEW!)
+    const docFindings = await checkDocDrift(files);
+
+    // 6. Check if we should skip deep review
+    if (triage.files_to_audit.length === 0 && docFindings.length === 0) {
         console.log('⏭️  No critical files. Posting skip comment...');
         await postComment(ctx, formatTriageSkipComment(triage));
         return;
     }
 
-    // 5. Run Deep Review
-    const review = await runDeepReview(triage.files_to_audit, diff);
-    console.log(`\n🔬 Review Result:`, JSON.stringify(review, null, 2), '\n');
+    // 7. Run Deep Review (if there are code files to audit)
+    let review: JStarReviewResult;
+    if (triage.files_to_audit.length > 0) {
+        review = await runDeepReview(triage.files_to_audit, diff, architectureContext);
+        console.log(`\n🔬 Review Result:`, JSON.stringify(review, null, 2), '\n');
+    } else {
+        // Create a minimal review object if only doc drift was found
+        review = {
+            summary: {
+                risk_score: 70,
+                verdict: 'REQUEST_CHANGES',
+                tone: 'critical'
+            },
+            findings: []
+        };
+    }
 
-    // 6. Post Review Comment
-    await postComment(ctx, formatReviewComment(review));
+    // 8. Post Review Comment (with doc findings merged)
+    await postComment(ctx, formatReviewComment(review, docFindings));
 
     console.log('\n🏁 J Star Review Complete!');
 }
