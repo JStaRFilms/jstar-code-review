@@ -8,13 +8,16 @@ import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { TRIAGE_SYSTEM_PROMPT, ANALYST_SYSTEM_PROMPT, buildAnalystUserPrompt } from './prompts.js';
+import { TRIAGE_SYSTEM_PROMPT, ANALYST_SYSTEM_PROMPT, buildAnalystUserPrompt, CHUNK_REVIEW_SYSTEM_PROMPT, buildChunkReviewPrompt } from './prompts.js';
 import {
     TriageSchema,
     JStarReviewSchema,
+    ChunkReviewSchema,
     EnvSchema,
     type TriageResult,
     type JStarReviewResult,
+    type ChunkReviewResult,
+    type Finding,
 } from './types.js';
 
 // Initialize Groq provider
@@ -147,6 +150,25 @@ async function runTriage(files: string[], diffLength: number): Promise<TriageRes
 async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
     console.log(`🧠 Running Deep Review with ${ANALYST_MODEL}...`);
 
+    // Estimate tokens (rough: 4 chars per token)
+    const estimatedTokens = Math.ceil(diff.length / 4);
+    const TOKEN_LIMIT = 8000; // Safe buffer under 10K TPM
+
+    if (estimatedTokens <= TOKEN_LIMIT) {
+        // Small diff: use single-shot review (original behavior)
+        console.log(`📦 Diff size OK (${estimatedTokens} est. tokens), using single-shot review`);
+        return runSingleShotReview(filesToAudit, allFiles, diff, architectureContext);
+    }
+
+    // Large diff: use chunked map-reduce
+    console.log(`📦 Diff too large (${estimatedTokens} est. tokens), using chunked review`);
+    return runChunkedReview(filesToAudit, diff, architectureContext);
+}
+
+/**
+ * Original single-shot review for small diffs.
+ */
+async function runSingleShotReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
     const enhancedSystemPrompt = architectureContext
         ? `${ANALYST_SYSTEM_PROMPT}\n\n--- PROJECT CONTEXT ---\n${architectureContext}`
         : ANALYST_SYSTEM_PROMPT;
@@ -159,6 +181,137 @@ async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: s
     });
 
     return object;
+}
+
+// ============================================================
+// CHUNKED MAP-REDUCE REVIEW
+// ============================================================
+
+interface FileDiff {
+    filename: string;
+    diff: string;
+}
+
+/**
+ * Parse unified diff into per-file chunks.
+ */
+function splitDiffByFile(diff: string): FileDiff[] {
+    const fileDiffs: FileDiff[] = [];
+    // Match diff headers: "diff --git a/path b/path" or "--- a/path"
+    const diffPattern = /^diff --git a\/(.+?) b\/\1/gm;
+
+    let match;
+    const positions: { filename: string; start: number }[] = [];
+
+    while ((match = diffPattern.exec(diff)) !== null) {
+        positions.push({ filename: match[1], start: match.index });
+    }
+
+    // Extract each file's diff
+    for (let i = 0; i < positions.length; i++) {
+        const start = positions[i].start;
+        const end = i + 1 < positions.length ? positions[i + 1].start : diff.length;
+        fileDiffs.push({
+            filename: positions[i].filename,
+            diff: diff.substring(start, end).trim(),
+        });
+    }
+
+    return fileDiffs;
+}
+
+/**
+ * Review large diffs by chunking per-file and aggregating.
+ */
+async function runChunkedReview(filesToAudit: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
+    const fileDiffs = splitDiffByFile(diff);
+    console.log(`🔪 Split into ${fileDiffs.length} file chunks`);
+
+    // Filter to only audit files the triage identified as critical
+    const relevantDiffs = fileDiffs.filter(fd =>
+        filesToAudit.some(f => fd.filename.endsWith(f) || f.endsWith(fd.filename))
+    );
+
+    console.log(`🎯 Reviewing ${relevantDiffs.length} critical files`);
+
+    // Review each file chunk (parallel in batches of 3 to not exceed RPM)
+    const BATCH_SIZE = 3;
+    const allChunkResults: ChunkReviewResult[] = [];
+
+    for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
+        const batch = relevantDiffs.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+            batch.map(fd => reviewFileChunk(fd.filename, fd.diff, architectureContext))
+        );
+        allChunkResults.push(...batchResults);
+
+        if (i + BATCH_SIZE < relevantDiffs.length) {
+            console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files...`);
+        }
+    }
+
+    // Aggregate results
+    return aggregateChunkReviews(allChunkResults);
+}
+
+/**
+ * Review a single file chunk.
+ */
+async function reviewFileChunk(filename: string, fileDiff: string, architectureContext: string): Promise<ChunkReviewResult> {
+    try {
+        const { object } = await generateObject({
+            model: groq(ANALYST_MODEL),
+            schema: ChunkReviewSchema,
+            system: CHUNK_REVIEW_SYSTEM_PROMPT,
+            prompt: buildChunkReviewPrompt(filename, fileDiff, architectureContext),
+        });
+        return object;
+    } catch (error) {
+        console.log(`⚠️ Failed to review ${filename}, skipping`);
+        return { file: filename, findings: [], file_risk: 100 };
+    }
+}
+
+/**
+ * Combine chunk reviews into final JStarReviewResult.
+ */
+function aggregateChunkReviews(chunks: ChunkReviewResult[]): JStarReviewResult {
+    const allFindings: Finding[] = [];
+    let totalRisk = 0;
+
+    for (const chunk of chunks) {
+        allFindings.push(...chunk.findings);
+        totalRisk += chunk.file_risk;
+    }
+
+    const avgRisk = chunks.length > 0 ? Math.round(totalRisk / chunks.length) : 100;
+
+    // Determine verdict based on findings
+    const hasCritical = allFindings.some(f => f.severity === 'CRITICAL');
+    const hasHigh = allFindings.some(f => f.severity === 'HIGH');
+
+    let verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' = 'APPROVE';
+    let tone: 'encouraging' | 'critical' | 'neutral' = 'encouraging';
+
+    if (hasCritical) {
+        verdict = 'REQUEST_CHANGES';
+        tone = 'critical';
+    } else if (hasHigh) {
+        verdict = 'REQUEST_CHANGES';
+        tone = 'neutral';
+    } else if (allFindings.length > 0) {
+        verdict = 'COMMENT';
+        tone = 'neutral';
+    }
+
+    return {
+        summary: {
+            risk_score: avgRisk,
+            verdict,
+            tone,
+        },
+        findings: allFindings,
+    };
 }
 
 // ============================================================

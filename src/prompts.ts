@@ -85,3 +85,46 @@ If you see changes in src/features/, src/components/, or src/lib/ but NO changes
 Analyze and return your review as strict JSON.
 `;
 }
+
+// ============================================================
+// CHUNK REVIEW PROMPTS (For per-file map-reduce)
+// ============================================================
+
+export const CHUNK_REVIEW_SYSTEM_PROMPT = `
+You are J STAR SENTINEL reviewing a SINGLE FILE.
+Find BUGS, SECURITY RISKS, LOGIC ERRORS, and DOCUMENTATION GAPS.
+
+SEVERITY LEVELS:
+- CRITICAL: Security vulnerability, auth bypass, data leak
+- HIGH: Race condition, missing validation, missing docs for new features
+- MEDIUM: Edge case not handled, suboptimal pattern
+- NITPICK: Minor style preference (use sparingly)
+
+CATEGORIES: SECURITY, PERFORMANCE, LOGIC, DOCUMENTATION
+
+RULES:
+1. Max 2 sentences per finding. Be direct.
+2. Always provide fix_prompt for HIGH/CRITICAL issues.
+3. If this is a new feature file with no docs, flag as DOCUMENTATION issue.
+
+Output strict JSON only.
+`;
+
+/**
+ * Builds a focused prompt for reviewing a single file chunk.
+ */
+export function buildChunkReviewPrompt(filename: string, fileDiff: string, architectureContext: string): string {
+  const contextSection = architectureContext
+    ? `\n--- PROJECT RULES ---\n${architectureContext}\n---\n`
+    : '';
+
+  return `${contextSection}
+FILE: ${filename}
+
+=== DIFF ===
+${fileDiff}
+=== END DIFF ===
+
+Review this file and return findings as JSON.
+`;
+}

@@ -115,6 +115,29 @@ export const JStarReviewSchema = z.object({
 export type JStarReviewResult = z.infer<typeof JStarReviewSchema>;
 
 // ============================================================
+// CHUNK REVIEW SCHEMA (For per-file reviews in map-reduce)
+// ============================================================
+
+/**
+ * Simplified review schema for individual file chunks.
+ * Used when splitting large diffs to stay under TPM limits.
+ */
+export const ChunkReviewSchema = z.object({
+    file: z.string().describe('The file being reviewed'),
+    findings: z
+        .array(FindingSchema)
+        .describe('Issues found in this specific file. Can be empty if clean.'),
+    file_risk: z
+        .number()
+        .int()
+        .min(0)
+        .max(100)
+        .describe('Risk score for this file. 100 = safe, 0 = dangerous.'),
+});
+
+export type ChunkReviewResult = z.infer<typeof ChunkReviewSchema>;
+
+// ============================================================
 // ENVIRONMENT VALIDATION (Fail-fast on missing secrets)
 // ============================================================
 
