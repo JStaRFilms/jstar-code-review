@@ -167,7 +167,7 @@ Classify this PR and identify critical files to audit.
         model: groq(ANALYST_MODEL),
         schema: JStarReviewSchema,
         system: ANALYST_SYSTEM_PROMPT,
-        prompt: buildAnalystUserPrompt(triage.files_to_audit, MOCK_DIFF),
+        prompt: buildAnalystUserPrompt(triage.files_to_audit, MOCK_FILES, MOCK_DIFF),
     });
     const reviewTime = Date.now() - reviewStart;
 
