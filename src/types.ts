@@ -51,7 +51,7 @@ export type Severity = z.infer<typeof Severity>;
 /**
  * Categories of issues found.
  */
-export const Category = z.enum(['SECURITY', 'PERFORMANCE', 'LOGIC']);
+export const Category = z.enum(['SECURITY', 'PERFORMANCE', 'LOGIC', 'DOCUMENTATION']);
 export type Category = z.infer<typeof Category>;
 
 /**

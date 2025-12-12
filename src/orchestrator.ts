@@ -2,7 +2,7 @@
 // The Runner: J Star Code Review Orchestrator
 // Uses the Vercel AI SDK for structured output with Zod validation.
 
-import { generateObject, generateText } from 'ai';
+import { generateObject } from 'ai';
 import { createGroq } from '@ai-sdk/groq';
 import { Octokit } from '@octokit/rest';
 import * as fs from 'fs';
@@ -15,7 +15,6 @@ import {
     EnvSchema,
     type TriageResult,
     type JStarReviewResult,
-    type Finding,
 } from './types.js';
 
 // Initialize Groq provider
@@ -89,142 +88,6 @@ function loadArchitectureContext(): string {
 }
 
 // ============================================================
-// DOC DRIFT DETECTION
-// ============================================================
-
-interface DocFinding {
-    file: string;
-    line: number;
-    severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'NITPICK';
-    category: string;
-    message: string;
-    fix_prompt?: string;
-}
-
-interface DocDriftMapping {
-    sourcePath: string;
-    docsPath: string;
-    description: string;
-}
-
-interface JStarConfig {
-    docDrift?: {
-        enabled: boolean;
-        mappings: DocDriftMapping[];
-    };
-}
-
-function loadJStarConfig(): JStarConfig {
-    const configPath = path.join(process.cwd(), '.jstar/config.json');
-    if (fs.existsSync(configPath)) {
-        try {
-            const content = fs.readFileSync(configPath, 'utf-8');
-            return JSON.parse(content);
-        } catch (e) {
-            console.log('⚠️ Could not parse .jstar/config.json, using defaults');
-        }
-    }
-    // Default config if no file exists
-    return {
-        docDrift: {
-            enabled: true,
-            mappings: [
-                { sourcePath: 'src/features/', docsPath: 'docs/features/', description: 'Feature modules' }
-            ]
-        }
-    };
-}
-
-async function checkDocDrift(prFiles: string[]): Promise<DocFinding[]> {
-    const findings: DocFinding[] = [];
-    const config = loadJStarConfig();
-
-    if (!config.docDrift?.enabled) {
-        console.log('📚 Doc drift check disabled in config.');
-        return findings;
-    }
-
-    const mappings = config.docDrift.mappings;
-
-    // Track touched items per mapping
-    const touchedItems: Map<DocDriftMapping, Set<string>> = new Map();
-
-    for (const mapping of mappings) {
-        touchedItems.set(mapping, new Set());
-    }
-
-    // 1. Identify which items were touched for each mapping
-    for (const file of prFiles) {
-        for (const mapping of mappings) {
-            if (file.startsWith(mapping.sourcePath)) {
-                // Extract the item name (first folder/file after the source path)
-                const relativePath = file.slice(mapping.sourcePath.length);
-                const itemName = relativePath.split('/')[0];
-                if (itemName) {
-                    touchedItems.get(mapping)!.add(itemName);
-                }
-            }
-        }
-    }
-
-    // Count total touched items
-    let totalTouched = 0;
-    for (const items of touchedItems.values()) {
-        totalTouched += items.size;
-    }
-
-    if (totalTouched === 0) {
-        console.log('📚 No tracked folders touched, skipping doc drift check.');
-        return findings;
-    }
-
-    console.log(`📚 Checking documentation for ${totalTouched} touched items...`);
-
-    // 2. Check if docs exist/updated for each touched item
-    for (const [mapping, items] of touchedItems.entries()) {
-        for (const item of items) {
-            const expectedDocPath = `${mapping.docsPath}${item}`;
-            const hasDocUpdate = prFiles.some(f => f.startsWith(expectedDocPath));
-
-            if (!hasDocUpdate) {
-                console.log(`   ⚠️ Missing docs for: ${mapping.sourcePath}${item} (${mapping.description})`);
-
-                // 3. Generate a documentation stub using AI
-                try {
-                    const { text: docDraft } = await generateText({
-                        model: groq(TRIAGE_MODEL),
-                        system: "You are a Technical Writer. Generate a brief, concise markdown documentation stub. Keep it under 200 words.",
-                        prompt: `The developer updated "${item}" in ${mapping.sourcePath}${item}/ but forgot to document it.\n\nWrite a concise markdown template for ${mapping.docsPath}${item}.md explaining:\n1. What this ${mapping.description.toLowerCase()} does (placeholder)\n2. Key files\n3. Usage notes\n\nKeep it minimal and professional.`,
-                    });
-
-                    findings.push({
-                        file: `${mapping.docsPath}${item}.md`,
-                        line: 1,
-                        severity: 'HIGH',
-                        category: 'DOCUMENTATION',
-                        message: `🚨 **Doc Drift Detected:** You modified \`${mapping.sourcePath}${item}/\` but didn't update the documentation in \`${mapping.docsPath}\`.`,
-                        fix_prompt: `Create file ${mapping.docsPath}${item}.md with this content:\n\n${docDraft}`
-                    });
-                } catch (e) {
-                    findings.push({
-                        file: `${mapping.docsPath}${item}.md`,
-                        line: 1,
-                        severity: 'HIGH',
-                        category: 'DOCUMENTATION',
-                        message: `🚨 **Doc Drift Detected:** You modified \`${mapping.sourcePath}${item}/\` but didn't update the documentation in \`${mapping.docsPath}\`.`,
-                        fix_prompt: `Create documentation for ${item} in ${mapping.docsPath}${item}.md`
-                    });
-                }
-            } else {
-                console.log(`   ✅ Docs updated for: ${mapping.sourcePath}${item}`);
-            }
-        }
-    }
-
-    return findings;
-}
-
-// ============================================================
 // PR DIFF FETCHING
 // ============================================================
 
@@ -275,10 +138,10 @@ Classify this PR and identify critical files to audit.
 }
 
 // ============================================================
-// DEEP REVIEW (Step 2: Expensive Analyst)
+// DEEP REVIEW (Step 2: AI Analyst - includes doc check)
 // ============================================================
 
-async function runDeepReview(filesToAudit: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
+async function runDeepReview(filesToAudit: string[], diff: string, allFiles: string[], architectureContext: string): Promise<JStarReviewResult> {
     console.log(`🧠 Running Deep Review on ${filesToAudit.length} files with ${ANALYST_MODEL}...`);
 
     // Inject architecture context into the system prompt
@@ -286,11 +149,15 @@ async function runDeepReview(filesToAudit: string[], diff: string, architectureC
         ? `${ANALYST_SYSTEM_PROMPT}\n\n--- PROJECT CONTEXT ---\n${architectureContext}`
         : ANALYST_SYSTEM_PROMPT;
 
+    // Build prompt with file list context so AI can check for missing docs
+    const prompt = buildAnalystUserPrompt(filesToAudit, diff) +
+        `\n\n--- ALL FILES IN THIS PR ---\n${allFiles.join('\n')}\n\nCheck if documentation was included for any new features.`;
+
     const { object } = await generateObject({
         model: groq(ANALYST_MODEL),
         schema: JStarReviewSchema,
         system: enhancedSystemPrompt,
-        prompt: buildAnalystUserPrompt(filesToAudit, diff),
+        prompt,
     });
 
     return object;
@@ -311,57 +178,32 @@ No critical files detected. Skipping deep review to save tokens. 🎉
 `;
 }
 
-function formatReviewComment(review: JStarReviewResult, docFindings: DocFinding[]): string {
-    const allFindings = [...docFindings, ...review.findings];
-    const hasDocIssues = docFindings.length > 0;
-
-    // Adjust score if there are doc issues
-    const score = hasDocIssues
-        ? Math.min(review.summary.risk_score, 60) // Penalty for missing docs
-        : review.summary.risk_score;
-
+function formatReviewComment(review: JStarReviewResult): string {
+    const score = review.summary.risk_score;
     const icon = score > 80 ? '🟢' : score > 50 ? '🟡' : '🔴';
-    const verdict = hasDocIssues ? 'REQUEST_CHANGES' : review.summary.verdict;
 
     // 1. The Executive Summary Table
     let md = `# ${icon} J Star Code Audit\n\n`;
     md += `| Metric | Result | Status |\n`;
     md += `| :--- | :--- | :--- |\n`;
     md += `| **Risk Score** | ${score}/100 | ${score > 80 ? 'Safe' : 'Risky'} |\n`;
-    md += `| **Verdict** | ${verdict} | ${verdict === 'APPROVE' ? '✅' : '⚠️'} |\n`;
-    md += `| **Tone** | ${review.summary.tone.toUpperCase()} | 🤖 |\n`;
-    if (hasDocIssues) {
-        md += `| **Doc Drift** | ${docFindings.length} missing | 📚 |\n`;
-    }
-    md += `\n---\n\n`;
+    md += `| **Verdict** | ${review.summary.verdict} | ${review.summary.verdict === 'APPROVE' ? '✅' : '⚠️'} |\n`;
+    md += `| **Tone** | ${review.summary.tone.toUpperCase()} | 🤖 |\n\n`;
 
-    // 2. Documentation Findings (if any)
-    if (docFindings.length > 0) {
-        md += `## 📚 Documentation Issues\n\n`;
-        for (const finding of docFindings) {
-            md += `### 🔶 ${finding.severity}: ${finding.file}\n`;
-            md += `**Category:** \`${finding.category}\`\n\n`;
-            md += `> ${finding.message}\n\n`;
-            if (finding.fix_prompt) {
-                md += `<details>\n<summary><b>🛠️ Click to Copy AI Fix Prompt</b></summary>\n\n`;
-                md += `\`\`\`text\n${finding.fix_prompt}\n\`\`\`\n`;
-                md += `</details>\n\n`;
-            }
-            md += `---\n`;
-        }
-    }
+    md += `---\n\n`;
 
-    // 3. Code Findings
-    md += `## 🔍 Code Review Findings\n\n`;
+    // 2. The Detailed Findings (AI now includes DOCUMENTATION category)
+    md += `## 🔍 Findings\n\n`;
 
     if (review.findings.length === 0) {
-        md += `*No critical code issues found. Great job!* ✨\n`;
+        md += `*No issues found. Great job!* ✨\n`;
     }
 
     for (const finding of review.findings) {
         const severityIcon = finding.severity === 'CRITICAL' ? '🚨' : finding.severity === 'HIGH' ? '🔶' : '🔹';
+        const categoryIcon = finding.category === 'DOCUMENTATION' ? '📚' : '';
 
-        md += `### ${severityIcon} ${finding.severity}: ${finding.file}\n`;
+        md += `### ${severityIcon} ${categoryIcon} ${finding.severity}: ${finding.file}\n`;
         md += `**Category:** \`${finding.category}\` | **Line:** ${finding.line}\n\n`;
         md += `> ${finding.message}\n\n`;
 
@@ -442,35 +284,19 @@ async function main() {
     const triage = await runTriage(files, diff.length);
     console.log(`\n📊 Triage Result:`, JSON.stringify(triage, null, 2), '\n');
 
-    // 5. Check Doc Drift (NEW!)
-    const docFindings = await checkDocDrift(files);
-
-    // 6. Check if we should skip deep review
-    if (triage.files_to_audit.length === 0 && docFindings.length === 0) {
+    // 5. Check if we should skip deep review
+    if (triage.files_to_audit.length === 0) {
         console.log('⏭️  No critical files. Posting skip comment...');
         await postComment(ctx, formatTriageSkipComment(triage));
         return;
     }
 
-    // 7. Run Deep Review (if there are code files to audit)
-    let review: JStarReviewResult;
-    if (triage.files_to_audit.length > 0) {
-        review = await runDeepReview(triage.files_to_audit, diff, architectureContext);
-        console.log(`\n🔬 Review Result:`, JSON.stringify(review, null, 2), '\n');
-    } else {
-        // Create a minimal review object if only doc drift was found
-        review = {
-            summary: {
-                risk_score: 70,
-                verdict: 'REQUEST_CHANGES',
-                tone: 'critical'
-            },
-            findings: []
-        };
-    }
+    // 6. Run Deep Review (AI handles code + doc drift detection)
+    const review = await runDeepReview(triage.files_to_audit, diff, files, architectureContext);
+    console.log(`\n🔬 Review Result:`, JSON.stringify(review, null, 2), '\n');
 
-    // 8. Post Review Comment (with doc findings merged)
-    await postComment(ctx, formatReviewComment(review, docFindings));
+    // 7. Post Review Comment
+    await postComment(ctx, formatReviewComment(review));
 
     console.log('\n🏁 J Star Review Complete!');
 }
