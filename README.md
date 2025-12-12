@@ -42,25 +42,39 @@ PR Opened
 
 ## 🚀 Quick Start
 
-### 1. Clone and Install
+### Option A: Add to Any Repository (Recommended)
+
+See **[docs/SPAWN_GUIDE.md](docs/SPAWN_GUIDE.md)** for a complete guide to spawn J Star in any repo.
+
+**TL;DR:**
+1. Copy `.github/workflows/spawn-template.yml` to your repo as `.github/workflows/jstar-review.yml`
+2. Add `GROQ_API_KEY` to your repo secrets
+3. Done! 🎉
+
+---
+
+### Option B: Clone and Self-Host
+
+#### 1. Clone and Install
 
 ```bash
 npm install
 ```
 
-### 2. Set Secrets in GitHub
+#### 2. Set Secrets in GitHub
 
 Go to your repo → Settings → Secrets and variables → Actions:
 
 | Secret | Description |
 |--------|-------------|
-| `OPENAI_API_KEY` | Your OpenAI API key |
+| `GROQ_API_KEY` | Your Groq API key from [console.groq.com](https://console.groq.com) |
 
 > `GITHUB_TOKEN` is automatically provided by GitHub Actions.
 
-### 3. Done!
+#### 3. Done!
 
 Open a PR and watch J Star review it.
+
 
 ## 🧪 Local Testing
 

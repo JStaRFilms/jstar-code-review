@@ -1,0 +1,89 @@
+# .github/workflows/reusable-review.yml
+# J Star Code Review - REUSABLE WORKFLOW
+# This is the actual worker that can be called from any repository.
+# 
+# USAGE: In your target repo, create a workflow file that calls this:
+# 
+#   uses: JStaRFilms/jstar-code-review/.github/workflows/reusable-review.yml@main
+#   secrets:
+#     GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+name: J Star Review (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      GROQ_API_KEY:
+        required: true
+        description: 'Groq API key for AI models'
+    inputs:
+      triage_model:
+        description: 'Model for triage step (cheap/fast)'
+        required: false
+        type: string
+        default: 'openai/gpt-oss-120b'
+      analyst_model:
+        description: 'Model for deep review (powerful)'
+        required: false
+        type: string
+        default: 'moonshotai/kimi-k2-instruct-0905'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    name: 🌟 J Star Review
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the TARGET repo (where the PR is)
+      - name: 📥 Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: target-repo
+
+      # Step 2: Checkout the J Star bot source code
+      - name: 📥 Checkout J Star Bot
+        uses: actions/checkout@v4
+        with:
+          repository: JStaRFilms/jstar-code-review
+          ref: main
+          path: jstar-bot
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: jstar-bot/package-lock.json
+
+      - name: 📦 Install Bot Dependencies
+        working-directory: jstar-bot
+        run: npm ci
+
+      # Step 3: Copy any .jstar config from target repo (if exists)
+      - name: 📋 Copy Target Repo Context
+        run: |
+          if [ -d "target-repo/.jstar" ]; then
+            echo "Found .jstar config in target repo, copying..."
+            cp -r target-repo/.jstar jstar-bot/.jstar
+          else
+            echo "No .jstar config found, using defaults"
+          fi
+
+      # Step 4: Run the reviewer from the bot directory
+      - name: 🤖 Run J Star Reviewer
+        working-directory: jstar-bot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TRIAGE_MODEL: ${{ inputs.triage_model }}
+          ANALYST_MODEL: ${{ inputs.analyst_model }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: npx tsx src/orchestrator.ts

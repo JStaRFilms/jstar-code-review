@@ -1,5 +1,9 @@
 # .github/workflows/jstar-review.yml
 # J Star Code Review - Automated PR Reviewer
+# 
+# This workflow runs on the jstar-code-review repo itself (self-hosting).
+# For OTHER repos, use the reusable workflow instead (see spawn-template.yml)
+#
 # Triggers on: PR open/update, or manual '/review' comment
 
 name: J Star Code Review
@@ -17,20 +21,31 @@ permissions:
   issues: write
 
 jobs:
+  # Gate job to check if we should run
+  check:
+    name: 🔍 Check Trigger
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check if should run
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "issue_comment" && \
+                  "${{ contains(github.event.comment.body, '/review') }}" == "true" && \
+                  "${{ github.event.issue.pull_request != null }}" == "true" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
   review:
     name: 🌟 J Star Review
     runs-on: ubuntu-latest
-    
-    # Only run on:
-    # 1. Pull request events, OR
-    # 2. Issue comments that:
-    #    - Start with '/review'
-    #    - Are on a pull request (not a regular issue)
-    if: >
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' &&
-       contains(github.event.comment.body, '/review') &&
-       github.event.issue.pull_request)
+    needs: check
+    if: needs.check.outputs.should_run == 'true'
 
     steps:
       - name: 📥 Checkout Repository
