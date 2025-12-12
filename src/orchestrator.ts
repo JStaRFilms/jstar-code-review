@@ -101,62 +101,123 @@ interface DocFinding {
     fix_prompt?: string;
 }
 
-async function checkDocDrift(prFiles: string[]): Promise<DocFinding[]> {
-    const findings: DocFinding[] = [];
+interface DocDriftMapping {
+    sourcePath: string;
+    docsPath: string;
+    description: string;
+}
 
-    // 1. Identify which features were touched
-    const touchedFeatures = new Set<string>();
-    for (const file of prFiles) {
-        // Regex to capture "src/features/FeatureName"
-        const match = file.match(/src\/features\/([^/]+)/);
-        if (match) {
-            touchedFeatures.add(match[1]);
+interface JStarConfig {
+    docDrift?: {
+        enabled: boolean;
+        mappings: DocDriftMapping[];
+    };
+}
+
+function loadJStarConfig(): JStarConfig {
+    const configPath = path.join(process.cwd(), '.jstar/config.json');
+    if (fs.existsSync(configPath)) {
+        try {
+            const content = fs.readFileSync(configPath, 'utf-8');
+            return JSON.parse(content);
+        } catch (e) {
+            console.log('⚠️ Could not parse .jstar/config.json, using defaults');
         }
     }
+    // Default config if no file exists
+    return {
+        docDrift: {
+            enabled: true,
+            mappings: [
+                { sourcePath: 'src/features/', docsPath: 'docs/features/', description: 'Feature modules' }
+            ]
+        }
+    };
+}
 
-    if (touchedFeatures.size === 0) {
-        console.log('📚 No feature folders touched, skipping doc drift check.');
+async function checkDocDrift(prFiles: string[]): Promise<DocFinding[]> {
+    const findings: DocFinding[] = [];
+    const config = loadJStarConfig();
+
+    if (!config.docDrift?.enabled) {
+        console.log('📚 Doc drift check disabled in config.');
         return findings;
     }
 
-    console.log(`📚 Checking documentation for ${touchedFeatures.size} touched features...`);
+    const mappings = config.docDrift.mappings;
 
-    // 2. Check if docs exist/updated for those features
-    for (const feature of touchedFeatures) {
-        const hasDocUpdate = prFiles.some(f => f.includes(`docs/features/${feature}`));
+    // Track touched items per mapping
+    const touchedItems: Map<DocDriftMapping, Set<string>> = new Map();
 
-        if (!hasDocUpdate) {
-            console.log(`   ⚠️ Missing docs for: ${feature}`);
+    for (const mapping of mappings) {
+        touchedItems.set(mapping, new Set());
+    }
 
-            // 3. Generate a documentation stub using AI
-            try {
-                const { text: docDraft } = await generateText({
-                    model: groq(TRIAGE_MODEL),
-                    system: "You are a Technical Writer. Generate a brief, concise markdown documentation stub. Keep it under 200 words.",
-                    prompt: `The developer updated the feature "${feature}" in src/features/${feature}/ but forgot to document it.\n\nWrite a concise markdown template for docs/features/${feature}.md explaining:\n1. What this feature does (placeholder)\n2. Key files\n3. Usage notes\n\nKeep it minimal and professional.`,
-                });
-
-                findings.push({
-                    file: `docs/features/${feature}.md`,
-                    line: 1,
-                    severity: 'HIGH',
-                    category: 'DOCUMENTATION',
-                    message: `🚨 **Doc Drift Detected:** You modified \`src/features/${feature}/\` but didn't update the documentation in \`docs/features/\`.`,
-                    fix_prompt: `Create file docs/features/${feature}.md with this content:\n\n${docDraft}`
-                });
-            } catch (e) {
-                // If AI generation fails, still report the finding without the draft
-                findings.push({
-                    file: `docs/features/${feature}.md`,
-                    line: 1,
-                    severity: 'HIGH',
-                    category: 'DOCUMENTATION',
-                    message: `🚨 **Doc Drift Detected:** You modified \`src/features/${feature}/\` but didn't update the documentation in \`docs/features/\`.`,
-                    fix_prompt: `Create documentation for the ${feature} feature in docs/features/${feature}.md`
-                });
+    // 1. Identify which items were touched for each mapping
+    for (const file of prFiles) {
+        for (const mapping of mappings) {
+            if (file.startsWith(mapping.sourcePath)) {
+                // Extract the item name (first folder/file after the source path)
+                const relativePath = file.slice(mapping.sourcePath.length);
+                const itemName = relativePath.split('/')[0];
+                if (itemName) {
+                    touchedItems.get(mapping)!.add(itemName);
+                }
             }
-        } else {
-            console.log(`   ✅ Docs updated for: ${feature}`);
+        }
+    }
+
+    // Count total touched items
+    let totalTouched = 0;
+    for (const items of touchedItems.values()) {
+        totalTouched += items.size;
+    }
+
+    if (totalTouched === 0) {
+        console.log('📚 No tracked folders touched, skipping doc drift check.');
+        return findings;
+    }
+
+    console.log(`📚 Checking documentation for ${totalTouched} touched items...`);
+
+    // 2. Check if docs exist/updated for each touched item
+    for (const [mapping, items] of touchedItems.entries()) {
+        for (const item of items) {
+            const expectedDocPath = `${mapping.docsPath}${item}`;
+            const hasDocUpdate = prFiles.some(f => f.startsWith(expectedDocPath));
+
+            if (!hasDocUpdate) {
+                console.log(`   ⚠️ Missing docs for: ${mapping.sourcePath}${item} (${mapping.description})`);
+
+                // 3. Generate a documentation stub using AI
+                try {
+                    const { text: docDraft } = await generateText({
+                        model: groq(TRIAGE_MODEL),
+                        system: "You are a Technical Writer. Generate a brief, concise markdown documentation stub. Keep it under 200 words.",
+                        prompt: `The developer updated "${item}" in ${mapping.sourcePath}${item}/ but forgot to document it.\n\nWrite a concise markdown template for ${mapping.docsPath}${item}.md explaining:\n1. What this ${mapping.description.toLowerCase()} does (placeholder)\n2. Key files\n3. Usage notes\n\nKeep it minimal and professional.`,
+                    });
+
+                    findings.push({
+                        file: `${mapping.docsPath}${item}.md`,
+                        line: 1,
+                        severity: 'HIGH',
+                        category: 'DOCUMENTATION',
+                        message: `🚨 **Doc Drift Detected:** You modified \`${mapping.sourcePath}${item}/\` but didn't update the documentation in \`${mapping.docsPath}\`.`,
+                        fix_prompt: `Create file ${mapping.docsPath}${item}.md with this content:\n\n${docDraft}`
+                    });
+                } catch (e) {
+                    findings.push({
+                        file: `${mapping.docsPath}${item}.md`,
+                        line: 1,
+                        severity: 'HIGH',
+                        category: 'DOCUMENTATION',
+                        message: `🚨 **Doc Drift Detected:** You modified \`${mapping.sourcePath}${item}/\` but didn't update the documentation in \`${mapping.docsPath}\`.`,
+                        fix_prompt: `Create documentation for ${item} in ${mapping.docsPath}${item}.md`
+                    });
+                }
+            } else {
+                console.log(`   ✅ Docs updated for: ${mapping.sourcePath}${item}`);
+            }
         }
     }
 
