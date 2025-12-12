@@ -9,20 +9,24 @@ PR Opened
     │
     ▼
 ┌─────────────────────────────────────────┐
-│  STAGE 1: TRIAGE (gpt-4o-mini)          │
-│  • Cheap model (~$0.001/PR)             │
-│  • Classifies risk level                │
-│  • Selects top 5 critical files         │
-│  • Skips if LOW risk (CSS, docs, etc.)  │
+│  STAGE 1: TRIAGE (Llama 17B)            │
+│  • Cheap & Fast                         │
+│  • Classifies risk & priority           │
 └─────────────────────────────────────────┘
     │
-    ▼ (Only if HIGH/CRITICAL files found)
+    ▼
 ┌─────────────────────────────────────────┐
-│  STAGE 2: DEEP REVIEW (gpt-4o)          │
-│  • Powerful model for accuracy          │
-│  • Only reviews critical files          │
-│  • Structured findings with fix prompts │
-│  • Posts markdown comment to PR         │
+│  STAGE 2: DOC DRIFT CHECK (New!)        │
+│  • "Vibe Check": Did you add a feature  │
+│     but forget the docs?                │
+│  • Auto-generates fix prompts for docs  │
+└─────────────────────────────────────────┘
+    │
+    ▼ (If needed)
+┌─────────────────────────────────────────┐
+│  STAGE 3: DEEP REVIEW (Kimi k2)         │
+│  • Reads .jstar/rules.md for context    │
+│  • Reviews logic with full awareness    │
 └─────────────────────────────────────────┘
 ```
 
