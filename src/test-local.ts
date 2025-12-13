@@ -127,7 +127,7 @@ index aaaaaaa..bbbbbbb 100644
 // ============================================================
 
 function formatReviewComment(review: JStarReviewResult): string {
-    const score = review.summary.risk_score;
+    const score = review.summary.quality_score;
     const verdict = review.summary.verdict;
 
     // 1. Calculate Metrics
@@ -311,7 +311,7 @@ Classify this PR and identify critical files to audit.
     const reviewTime = Date.now() - reviewStart;
 
     console.log('🔬 Review Summary:');
-    console.log(`   Risk Score: ${review.summary.risk_score}/100`);
+    console.log(`   Quality Score: ${review.summary.quality_score}/100`);
     console.log(`   Verdict: ${review.summary.verdict}`);
     console.log(`   Tone: ${review.summary.tone}`);
     console.log(`   ⏱️  Time: ${reviewTime}ms\n`);

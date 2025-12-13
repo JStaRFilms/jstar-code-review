@@ -341,7 +341,7 @@ async function reviewFileChunk(filename: string, fileDiff: string, architectureC
         return object;
     } catch (error) {
         console.log(`⚠️ Failed to review ${filename}, skipping`);
-        return { file: filename, findings: [], file_risk: 100 };
+        return { file: filename, findings: [], quality_score: 0 };
     }
 }
 
@@ -350,14 +350,14 @@ async function reviewFileChunk(filename: string, fileDiff: string, architectureC
  */
 function aggregateChunkReviews(chunks: ChunkReviewResult[]): JStarReviewResult {
     const allFindings: Finding[] = [];
-    let totalRisk = 0;
+    let totalQuality = 0;
 
     for (const chunk of chunks) {
         allFindings.push(...chunk.findings);
-        totalRisk += chunk.file_risk;
+        totalQuality += chunk.quality_score;
     }
 
-    const avgRisk = chunks.length > 0 ? Math.round(totalRisk / chunks.length) : 100;
+    const avgQuality = chunks.length > 0 ? Math.round(totalQuality / chunks.length) : 0;
 
     // Determine verdict based on findings
     const hasCritical = allFindings.some(f => f.severity === 'CRITICAL');
@@ -379,7 +379,7 @@ function aggregateChunkReviews(chunks: ChunkReviewResult[]): JStarReviewResult {
 
     return {
         summary: {
-            risk_score: avgRisk,
+            quality_score: avgQuality,
             verdict,
             tone,
         },
@@ -402,7 +402,7 @@ No critical files detected. Skipping deep review. 🎉`;
 }
 
 function formatReviewComment(review: JStarReviewResult): string {
-    const score = review.summary.risk_score;
+    const score = review.summary.quality_score;
     const verdict = review.summary.verdict;
 
     // 1. Calculate Metrics

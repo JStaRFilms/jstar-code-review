@@ -93,12 +93,12 @@ export type Finding = z.infer<typeof FindingSchema>;
  * Summary of the entire review.
  */
 export const SummarySchema = z.object({
-    risk_score: z
+    quality_score: z
         .number()
         .int()
         .min(0)
         .max(100)
-        .describe('0-100 score. 100 = perfectly safe, 0 = extremely dangerous.'),
+        .describe('0-100 score. 100 = perfectly safe/high quality, 0 = extremely dangerous/broken.'),
     verdict: Verdict.describe('The final recommendation for this PR.'),
     tone: Tone.describe('The overall tone of the review based on findings.'),
 });
@@ -131,12 +131,12 @@ export const ChunkReviewSchema = z.object({
     findings: z
         .array(FindingSchema)
         .describe('Issues found in this specific file. Can be empty if clean.'),
-    file_risk: z
+    quality_score: z
         .number()
         .int()
         .min(0)
         .max(100)
-        .describe('Risk score for this file. 100 = safe, 0 = dangerous.'),
+        .describe('Quality score for this file. 100 = perfect/safe, 0 = dangerous/broken.'),
 });
 
 export type ChunkReviewResult = z.infer<typeof ChunkReviewSchema>;
