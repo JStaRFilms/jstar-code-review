@@ -229,13 +229,47 @@ async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: s
 
     if (estimatedTokens <= TOKEN_LIMIT) {
         // Small diff: use single-shot review (original behavior)
-        console.log(`📦 Diff size OK (${estimatedTokens} est. tokens), using single-shot review`);
-        return runSingleShotReview(filesToAudit, allFiles, diff, architectureContext, existingDocs);
+        const rawResult = await runSingleShotReview(filesToAudit, allFiles, diff, architectureContext, existingDocs);
+        return adjustScoreForSkippedFiles(rawResult, filesToAudit.length, allFiles.length);
     }
 
     // Large diff: use chunked map-reduce
     console.log(`📦 Diff too large (${estimatedTokens} est. tokens), using chunked review`);
-    return runChunkedReview(filesToAudit, diff, architectureContext, existingDocs);
+    const rawResult = await runChunkedReview(filesToAudit, diff, architectureContext, existingDocs);
+    return adjustScoreForSkippedFiles(rawResult, filesToAudit.length, allFiles.length);
+}
+
+/**
+ * Adjusts the score to account for files that were skipped by Triage (assumed safe/100).
+ * Rule: Final Score = ((RawScore * AuditedCount) + (100 * SkippedCount)) / TotalCount
+ */
+function adjustScoreForSkippedFiles(result: JStarReviewResult, auditedCount: number, totalCount: number): JStarReviewResult {
+    if (totalCount === 0) return result;
+
+    // Cap auditedCount at totalCount to prevent negative skipped (e.g. if filesToAudit includes deleted files)
+    const effectiveAudited = Math.min(auditedCount, totalCount);
+    const skippedCount = totalCount - effectiveAudited;
+
+    if (skippedCount <= 0) return result;
+
+    const currentScore = result.summary.quality_score;
+    const weightedScore = Math.round(
+        ((currentScore * effectiveAudited) + (100 * skippedCount)) / totalCount
+    );
+
+    console.log(`⚖️  Weighted Score Adjustment:`);
+    console.log(`    - Raw Score (Audited Files): ${currentScore}`);
+    console.log(`    - Audited Files: ${effectiveAudited}`);
+    console.log(`    - Skipped Files (Assumed 100): ${skippedCount}`);
+    console.log(`    - New Weighted Score: ${weightedScore}`);
+
+    return {
+        ...result,
+        summary: {
+            ...result.summary,
+            quality_score: weightedScore
+        }
+    };
 }
 
 /**
