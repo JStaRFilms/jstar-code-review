@@ -2,67 +2,44 @@
 
 | Score | Verdict | 🚨 Critical | 🔶 High | 🔹 Medium | 🔧 Nitpick |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **20/100** | **REQUEST_CHANGES** | 4 | 2 | - | - |
+| **15/100** | **REQUEST_CHANGES** | 4 | 1 | - | - |
 
 ## 📄 src/auth/login.ts
 
 > [!CAUTION]
 > **SQL Injection in login query**
-> Raw string interpolation allows attackers to inject arbitrary SQL and bypass authentication.
->
-> **Fix:**
-> ```
-> Replace the raw interpolated query with a parameterized statement: const user = await db.query('SELECT * FROM users WHERE email = ?', [email]);
-> ```
+> String interpolation in SQL query allows attackers to inject arbitrary SQL, bypassing authentication or dumping the database.
 
 > [!CAUTION]
-> **Plain-text password comparison**
-> Storing and comparing passwords in plain text exposes user credentials if the database is compromised.
->
-> **Fix:**
-> ```
-> Hash passwords with a secure algorithm like bcrypt: const valid = await bcrypt.compare(password, user.password);
-> ```
+> **Plain-text password storage**
+> Comparing plain-text passwords means credentials are stored unhashed; a DB breach exposes every account.
 
 > [!WARNING]
 > **Missing rate limiting on login**
-> Absence of rate limiting enables brute-force attacks against user credentials.
->
-> **Fix:**
-> ```
-> Implement rate limiting middleware (e.g., express-rate-limit) on the login endpoint to throttle repeated attempts.
-> ```
+> No rate limiting enables brute-force attacks against any account.
 
-> [!WARNING]
-> **No session or token strategy**
-> Returning the raw user id as a token is insecure and provides no expiration or validation mechanism.
->
-> **Fix:**
-> ```
-> Create a signed JWT with an expiration: const token = jwt.sign({ sub: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-> ```
+**🛠️ Recommended Fixes**
+
+- **SQL Injection in login query**: Replace the raw string interpolation with parameterized queries using your database library's prepared statement API. Example: await db.query('SELECT * FROM users WHERE email = ?', [email])
+- **Plain-text password storage**: Hash passwords with a slow algorithm like bcrypt (cost 12+) before storage and compare hashes, never plain text.
+- **Missing rate limiting on login**: Implement rate limiting middleware (e.g., 5 attempts per IP per 15 minutes) and increment counters in Redis or DB before processing login.
 
 ---
 
 ## 📄 src/api/users/route.ts
 
 > [!CAUTION]
-> **Passwords exposed in user list**
-> Returning raw user records leaks password hashes to any caller, enabling credential theft.
->
-> **Fix:**
-> ```
-> Select only safe fields: const users = await db.query('SELECT id, name, email FROM users');
-> ```
+> **Passwords leaked in user list**
+> Returning all user rows includes password hashes, exposing every credential to any caller.
 
 > [!CAUTION]
 > **Authorization bypass in DELETE**
-> No permission check allows any client to delete arbitrary users, a privilege escalation flaw.
->
-> **Fix:**
-> ```
-> Add auth middleware and verify the caller owns the target account or has admin role before executing the delete.
-> ```
+> No ownership or role check allows any client to delete arbitrary users by ID.
+
+**🛠️ Recommended Fixes**
+
+- **Passwords leaked in user list**: Explicitly select only safe columns: SELECT id, name, email FROM users, or map the result to exclude password before JSON encoding.
+- **Authorization bypass in DELETE**: Add middleware that validates the requester's session and ensures only admins or the account owner can delete, then use parameterized DELETE.
 
 ---
 

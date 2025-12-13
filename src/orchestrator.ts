@@ -447,14 +447,21 @@ function formatReviewComment(review: JStarReviewResult): string {
         }
 
     } else {
+
         // Default Mode (Standard PR Review)
         for (const [file, findings] of byFile) {
             md += `## 📄 ${file}\n\n`;
+
+            const fixes: string[] = [];
 
             for (const f of findings) {
                 const title = f.title || 'Untitled Issue';
                 const isAlertAndCritical = f.severity === 'CRITICAL';
                 const isAlertAndHigh = f.severity === 'HIGH';
+
+                if (f.fix_prompt) {
+                    fixes.push(`**${title}**: ${f.fix_prompt}`);
+                }
 
                 // Rule 3: GitHub Alerts for CRITICAL/HIGH
                 if (isAlertAndCritical || isAlertAndHigh) {
@@ -462,24 +469,23 @@ function formatReviewComment(review: JStarReviewResult): string {
 
                     md += `> [!${alertType}]\n`;
                     md += `> **${title}**\n`;
-                    md += `> ${f.message}\n>\n`;
-
-                    if (f.fix_prompt) {
-                        md += `> **Fix:**\n> \`\`\`\n> ${f.fix_prompt}\n> \`\`\`\n`;
-                    }
+                    md += `> ${f.message}\n`;
                     md += `\n`; // End blockquote
                 } else {
                     // Standard Rendering for Medium/Nitpick
                     md += `### ${sevIcons[f.severity]} ${title}\n`;
                     md += `**Category:** ${f.category}\n\n`;
                     md += `${f.message}\n\n`;
-
-                    if (f.fix_prompt) {
-                        md += `**Fix:** \`${f.fix_prompt}\`\n\n`;
-                    }
                 }
             }
-            md += `---\n\n`;
+
+            if (fixes.length > 0) {
+                md += `**🛠️ Recommended Fixes**\n\n`;
+                for (const fix of fixes) {
+                    md += `- ${fix}\n`;
+                }
+            }
+            md += `\n---\n\n`;
         }
     }
 
