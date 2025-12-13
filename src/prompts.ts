@@ -59,16 +59,16 @@ Your goal is to find BUGS, SECURITY RISKS, LOGIC ERRORS, and **DOCUMENTATION GAP
 
 ### REQUIRED FIELDS:
 - **title**: A short, explicit, non-generic title (e.g. "SQL Injection in Login").
-- **fix_prompt**: REQUIRED for HIGH/CRITICAL issues.
+- **fix_prompt**: REQUIRED for CRITICAL, HIGH, and MEDIUM issues.
 
 ### OUTPUT FORMAT:
-You must output STRICT JSON matching the schema. No markdown, no code fences, just raw JSON.
-You MUST include both "summary" and "findings" fields. Do not omit the summary.
+You must output STRICT JSON matching the schema.No markdown, no code fences, just raw JSON.
+You MUST include both "summary" and "findings" fields.Do not omit the summary.
 
 JSON Structure:
 {
-  "summary": { "risk_score": 0-100, "verdict": "APPROVE"|"REQUEST_CHANGES"|"COMMENT", "tone": "encouraging"|"critical"|"neutral" },
-  "findings": [ { "file": "...", "severity": "...", "category": "...", "title": "...", "message": "...", "fix_prompt": "..." } ]
+  "summary": { "risk_score": 0 - 100, "verdict": "APPROVE" | "REQUEST_CHANGES" | "COMMENT", "tone": "encouraging" | "critical" | "neutral" },
+  "findings": [{ "file": "...", "severity": "...", "category": "...", "title": "...", "message": "...", "fix_prompt": "..." }]
 }
 `;
 
@@ -87,7 +87,7 @@ export function buildAnalystUserPrompt(
     : diff;
 
   const docsSection = existingDocs.length > 0
-    ? `\n=== EXISTING DOCS (DO NOT FLAG THESE FEATURES) ===\n${existingDocs.join('\n')}\n===\n`
+    ? `\n === EXISTING DOCS(DO NOT FLAG THESE FEATURES) ===\n${existingDocs.join('\n')} \n ===\n`
     : '\n(No existing feature docs detected)\n';
 
   return `
@@ -98,12 +98,12 @@ CRITICAL FILES TO AUDIT:
 ${JSON.stringify(filesToAudit)}
 ${docsSection}
 === BEGIN DIFF ===
-${truncatedDiff}
+  ${truncatedDiff}
 === END DIFF ===
 
-DOCUMENTATION CHECK RULES:
+  DOCUMENTATION CHECK RULES:
 1. Look at the EXISTING DOCS list above - these features are ALREADY DOCUMENTED
-2. Documentation is PER-FEATURE: "themes.md" covers ALL of src/features/themes/*
+2. Documentation is PER - FEATURE: "themes.md" covers ALL of src / features / themes/*
 3. ONLY flag missing docs if a feature folder has NO corresponding doc file
 4. Example: themes/schemas.ts + themes/actions.ts are BOTH covered by themes.md
 
@@ -132,7 +132,7 @@ CATEGORIES: SECURITY, PERFORMANCE, LOGIC, MAINTAINABILITY, STYLE, DOCUMENTATION
 RULES:
 1. Max 2 sentences per finding. Be direct.
 2. ⚠️ MANDATORY: You MUST provide "title" for every finding (short, explicit).
-3. ⚠️ MANDATORY: You MUST provide "fix_prompt" for ALL HIGH/CRITICAL findings.
+3. ⚠️ MANDATORY: You MUST provide "fix_prompt" for ALL CRITICAL, HIGH, and MEDIUM findings.
 4. Documentation is per-FEATURE not per-file. Check if feature doc exists before flagging.
 5. Hardcoded test usernames (johndoe, demo) with TODO comments are dev placeholders, not security issues.
 

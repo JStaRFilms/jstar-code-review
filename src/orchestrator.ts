@@ -400,8 +400,8 @@ function formatReviewComment(review: JStarReviewResult): string {
     const totalFindings = review.findings.length;
 
     // 2. Determine Mode
-    // High-Density Mode if >= 15 findings
-    const isHighDensity = totalFindings >= 15;
+    // High-Density Mode if >= 30 findings (Bumped from 15 to show Grouped Fixes more often)
+    const isHighDensity = totalFindings >= 30;
 
     // 3. Header (Score + Summary Table)
     const icon = score > 80 ? '🟢' : score > 50 ? '🟡' : '🔴';
