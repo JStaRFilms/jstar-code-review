@@ -64,7 +64,36 @@ function initGitHub(env: ReturnType<typeof validateEnv>): GitHubContext {
     };
 }
 
-function loadArchitectureContext(): string {
+// ============================================================
+// REMOTE CONTEXT LOADING (GitHub API)
+// ============================================================
+
+/**
+ * Helper to fetch a single file content from the remote repo.
+ * Returns null if not found.
+ */
+async function fetchRemoteFile(ctx: GitHubContext, path: string): Promise<string | null> {
+    try {
+        const { data } = await ctx.octokit.repos.getContent({
+            owner: ctx.owner,
+            repo: ctx.repo,
+            path: path,
+        });
+
+        if (Array.isArray(data) || !('content' in data)) {
+            return null; // It's a directory or submodule
+        }
+
+        return Buffer.from(data.content, 'base64').toString('utf-8');
+    } catch (e: any) {
+        if (e.status !== 404) {
+            console.log(`⚠️ Error fetching ${path}: ${e.message}`);
+        }
+        return null; // Not found
+    }
+}
+
+async function loadArchitectureContext(ctx: GitHubContext): Promise<string> {
     let contextDocs = "";
     const docs = [
         { name: 'ARCHITECTURE', file: '.jstar/architecture.md' },
@@ -72,70 +101,54 @@ function loadArchitectureContext(): string {
     ];
 
     for (const doc of docs) {
-        const filePath = path.join(process.cwd(), doc.file);
-        if (fs.existsSync(filePath)) {
-            contextDocs += `\n### ${doc.name}:\n${fs.readFileSync(filePath, 'utf-8')}\n`;
-            console.log(`📖 Loaded context: ${doc.file}`);
+        const content = await fetchRemoteFile(ctx, doc.file);
+        if (content) {
+            contextDocs += `\n### ${doc.name}:\n${content}\n`;
+            console.log(`📖 Loaded remote context: ${doc.file}`);
         }
     }
     return contextDocs;
 }
 
 /**
- * Load .jstar/config.json if it exists.
- */
-interface JStarConfig {
-    docDrift?: {
-        enabled: boolean;
-        mappings: Array<{
-            sourcePath: string;
-            docsPath: string;
-            description: string;
-        }>;
-    };
-}
-
-function loadJStarConfig(): JStarConfig | null {
-    const configPath = path.join(process.cwd(), '.jstar/config.json');
-    if (fs.existsSync(configPath)) {
-        try {
-            const content = fs.readFileSync(configPath, 'utf-8');
-            console.log('⚙️ Loaded .jstar/config.json');
-            return JSON.parse(content) as JStarConfig;
-        } catch (e) {
-            console.log('⚠️ Failed to parse .jstar/config.json');
-            return null;
-        }
-    }
-    return null;
-}
-
-/**
- * Scan the docs/ folder to find existing documentation files.
+ * Scan the docs/features folder on remote.
  * Returns a map of feature names to their doc files.
- * e.g., { "themes": "docs/features/themes.md", "auth": "docs/features/auth.md" }
  */
-function loadDocsInventory(): Map<string, string> {
+async function loadDocsInventory(ctx: GitHubContext): Promise<Map<string, string>> {
     const inventory = new Map<string, string>();
-    const docsDir = path.join(process.cwd(), 'docs/features');
+    const targetDirs = ['docs/features'];
 
-    if (!fs.existsSync(docsDir)) {
-        console.log('📁 No docs/features directory found');
-        return inventory;
-    }
+    for (const docsDir of targetDirs) {
+        // Remove leading/trailing slashes for cleanliness
+        const cleanPath = docsDir.replace(/^\/+|\/+$/g, '');
 
-    try {
-        const files = fs.readdirSync(docsDir);
-        for (const file of files) {
-            if (file.endsWith('.md')) {
-                // Extract feature name from filename (e.g., "themes.md" -> "themes")
-                const featureName = file.replace('.md', '');
-                inventory.set(featureName, `docs/features/${file}`);
+        try {
+            const { data } = await ctx.octokit.repos.getContent({
+                owner: ctx.owner,
+                repo: ctx.repo,
+                path: cleanPath,
+            });
+
+            if (Array.isArray(data)) {
+                for (const file of data) {
+                    if (file.name.endsWith('.md') && file.type === 'file') {
+                        // Extract feature name (e.g., "themes.md" -> "themes")
+                        const featureName = file.name.replace('.md', '');
+                        inventory.set(featureName, file.path);
+                    }
+                }
+            }
+        } catch (e: any) {
+            if (e.status === 404) {
+                console.log(`📁 Remote directory not found: ${cleanPath}`);
+            } else {
+                console.log(`⚠️ Failed to scan remote ${cleanPath}: ${e.message}`);
             }
         }
-        console.log(`📚 Found ${inventory.size} existing feature docs: ${[...inventory.keys()].join(', ')}`);
-    } catch (e) {
-        console.log('⚠️ Failed to scan docs/features');
+    }
+
+    if (inventory.size > 0) {
+        console.log(`📚 Found ${inventory.size} remote feature docs: ${[...inventory.keys()].join(', ')}`);
     }
 
     return inventory;
@@ -509,8 +522,8 @@ async function main() {
 
     console.log(`📦 Reviewing PR #${ctx.prNumber} in ${ctx.owner}/${ctx.repo}\n`);
 
-    const architectureContext = loadArchitectureContext();
-    const docsInventory = loadDocsInventory();
+    const architectureContext = await loadArchitectureContext(ctx);
+    const docsInventory = await loadDocsInventory(ctx);
     const existingDocs = [...docsInventory.values()]; // Convert Map to array of doc paths
 
     const [diff, files] = await Promise.all([fetchPRDiff(ctx), fetchPRFiles(ctx)]);
