@@ -51,7 +51,10 @@ export type Severity = z.infer<typeof Severity>;
 /**
  * Categories of issues found.
  */
-export const Category = z.enum(['SECURITY', 'PERFORMANCE', 'LOGIC', 'DOCUMENTATION']);
+/**
+ * Categories of issues found.
+ */
+export const Category = z.enum(['SECURITY', 'PERFORMANCE', 'LOGIC', 'MAINTAINABILITY', 'STYLE', 'DOCUMENTATION']);
 export type Category = z.infer<typeof Category>;
 
 /**
@@ -74,6 +77,7 @@ export const FindingSchema = z.object({
     line: z.number().int().positive().describe('The specific line number in the new code (1-indexed)'),
     severity: Severity.describe('How critical is this issue?'),
     category: Category.describe('What type of issue is this?'),
+    title: z.string().max(80).describe('Short, explicit title for the finding. E.g. "SQL Injection in Login Query"'),
     message: z.string().max(500).describe('Human-readable explanation of the issue. Max 2 sentences.'),
     fix_prompt: z
         .string()

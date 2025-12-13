@@ -31,11 +31,19 @@ Your goal is to find BUGS, SECURITY RISKS, LOGIC ERRORS, and **DOCUMENTATION GAP
 1. **SECURITY:** Look for SQL injection, exposed secrets, auth bypasses, and insecure data handling.
 2. **PERFORMANCE:** Look for N+1 queries, missing pagination, unbounded loops.
 3. **LOGIC:** Look for race conditions, unhandled errors, type safety issues, edge cases.
-4. **DOCUMENTATION (CRITICAL):**
-   - If the user adds a NEW FEATURE in \`src/features/\` but does NOT modify any file in \`docs/features/\`, flag this immediately as HIGH severity.
-   - If a new API route is created without comments or external docs, flag it.
-   - If a new component or service is added without corresponding documentation, flag it.
-   - **Fix Prompt for Docs:** Generate the actual markdown stub they should create.
+4. **MAINTAINABILITY/STYLE:** Look for messy code, hard-to-read patterns, or violation of project architecture.
+5. **DOCUMENTATION (CRITICAL - READ CAREFULLY):**
+   - Documentation is tracked PER-FEATURE, not per-file!
+   - A feature folder like \`src/features/themes/\` is covered by \`docs/features/themes.md\`
+   - If \`themes.md\` exists, ALL files in \`themes/\` are considered documented (schemas.ts, actions.ts, etc.)
+   - ONLY flag missing docs if a NEW feature folder has NO corresponding doc file
+   - You will be given a list of EXISTING_DOCS - check against this before flagging!
+   - **Fix Prompt for Docs:** If truly missing, generate the actual markdown stub they should create.
+   - Categorize documentation issues as **DOCUMENTATION** or **MAINTAINABILITY**.
+
+6. **PLACEHOLDER AUTH (DEV MODE):**
+   - If you see hardcoded usernames like "johndoe" or "demo" with a TODO comment, this is intentional dev scaffolding
+   - Only flag these are security issues if there's NO indication it's a dev placeholder
 
 ### THE J STAR TONE MATRIX:
 - **Authority:** High. Don't say "I think" or "maybe". Say "This causes X" or "This will fail when Y".
@@ -45,9 +53,13 @@ Your goal is to find BUGS, SECURITY RISKS, LOGIC ERRORS, and **DOCUMENTATION GAP
 
 ### SEVERITY GUIDE:
 - CRITICAL: Security vulnerability, data leak, auth bypass, crash in production.
-- HIGH: Race condition, missing validation, incorrect error handling, performance disaster, **missing docs for new features**.
+- HIGH: Race condition, missing validation, incorrect error handling, performance disaster, **missing docs for genuinely new features**.
 - MEDIUM: Edge case not handled, potential null reference, suboptimal pattern.
 - NITPICK: Very minor suggestion, style preference (use these sparingly).
+
+### REQUIRED FIELDS:
+- **title**: A short, explicit, non-generic title (e.g. "SQL Injection in Login").
+- **fix_prompt**: REQUIRED for HIGH/CRITICAL issues.
 
 ### OUTPUT FORMAT:
 You must output STRICT JSON matching the schema. No markdown, no code fences, just raw JSON.
@@ -56,17 +68,27 @@ You MUST include both "summary" and "findings" fields. Do not omit the summary.
 JSON Structure:
 {
   "summary": { "risk_score": 0-100, "verdict": "APPROVE"|"REQUEST_CHANGES"|"COMMENT", "tone": "encouraging"|"critical"|"neutral" },
-  "findings": [ ... ]
+  "findings": [ { "file": "...", "severity": "...", "category": "...", "title": "...", "message": "...", "fix_prompt": "..." } ]
 }
 `;
 
 /**
- * Builds the user prompt for the analyst, including focused files and diff.
+ * Builds the user prompt for the analyst, including focused files, diff, and existing docs.
  */
-export function buildAnalystUserPrompt(filesToAudit: string[], allFiles: string[], diff: string, maxLength = 50000): string {
+export function buildAnalystUserPrompt(
+  filesToAudit: string[],
+  allFiles: string[],
+  diff: string,
+  existingDocs: string[] = [],
+  maxLength = 50000
+): string {
   const truncatedDiff = diff.length > maxLength
     ? diff.substring(0, maxLength) + '\n\n[... truncated for token limit ...]'
     : diff;
+
+  const docsSection = existingDocs.length > 0
+    ? `\n=== EXISTING DOCS (DO NOT FLAG THESE FEATURES) ===\n${existingDocs.join('\n')}\n===\n`
+    : '\n(No existing feature docs detected)\n';
 
   return `
 FILES CHANGED IN THIS PR:
@@ -74,13 +96,18 @@ ${allFiles.join('\n')}
 
 CRITICAL FILES TO AUDIT:
 ${JSON.stringify(filesToAudit)}
-
+${docsSection}
 === BEGIN DIFF ===
 ${truncatedDiff}
 === END DIFF ===
 
-IMPORTANT: Check if any new features were added without corresponding documentation.
-If you see changes in src/features/, src/components/, or src/lib/ but NO changes in docs/, flag it as DOCUMENTATION issue.
+DOCUMENTATION CHECK RULES:
+1. Look at the EXISTING DOCS list above - these features are ALREADY DOCUMENTED
+2. Documentation is PER-FEATURE: "themes.md" covers ALL of src/features/themes/*
+3. ONLY flag missing docs if a feature folder has NO corresponding doc file
+4. Example: themes/schemas.ts + themes/actions.ts are BOTH covered by themes.md
+
+REMINDER: You MUST include "fix_prompt" for every HIGH and CRITICAL finding!
 
 Analyze and return your review as strict JSON.
 `;
@@ -92,38 +119,58 @@ Analyze and return your review as strict JSON.
 
 export const CHUNK_REVIEW_SYSTEM_PROMPT = `
 You are J STAR SENTINEL reviewing a SINGLE FILE.
-Find BUGS, SECURITY RISKS, LOGIC ERRORS, and DOCUMENTATION GAPS.
+Find BUGS, SECURITY RISKS, LOGIC ERRORS, MAINTAINABILITY ISSUES, and DOCUMENTATION GAPS.
 
 SEVERITY LEVELS:
 - CRITICAL: Security vulnerability, auth bypass, data leak
-- HIGH: Race condition, missing validation, missing docs for new features
+- HIGH: Race condition, missing validation, missing docs for genuinely new features
 - MEDIUM: Edge case not handled, suboptimal pattern
 - NITPICK: Minor style preference (use sparingly)
 
-CATEGORIES: SECURITY, PERFORMANCE, LOGIC, DOCUMENTATION
+CATEGORIES: SECURITY, PERFORMANCE, LOGIC, MAINTAINABILITY, STYLE, DOCUMENTATION
 
 RULES:
 1. Max 2 sentences per finding. Be direct.
-2. Always provide fix_prompt for HIGH/CRITICAL issues.
-3. If this is a new feature file with no docs, flag as DOCUMENTATION issue.
+2. ⚠️ MANDATORY: You MUST provide "title" for every finding (short, explicit).
+3. ⚠️ MANDATORY: You MUST provide "fix_prompt" for ALL HIGH/CRITICAL findings.
+4. Documentation is per-FEATURE not per-file. Check if feature doc exists before flagging.
+5. Hardcoded test usernames (johndoe, demo) with TODO comments are dev placeholders, not security issues.
 
 Output strict JSON only.
 `;
 
 /**
  * Builds a focused prompt for reviewing a single file chunk.
+ * Now includes existing docs inventory to prevent false positives.
  */
-export function buildChunkReviewPrompt(filename: string, fileDiff: string, architectureContext: string): string {
+export function buildChunkReviewPrompt(
+  filename: string,
+  fileDiff: string,
+  architectureContext: string,
+  existingDocs: string[] = []
+): string {
   const contextSection = architectureContext
     ? `\n--- PROJECT RULES ---\n${architectureContext}\n---\n`
     : '';
 
-  return `${contextSection}
+  const docsSection = existingDocs.length > 0
+    ? `\n--- EXISTING FEATURE DOCS (already documented) ---\n${existingDocs.join('\n')}\n---\n`
+    : '';
+
+  // Extract feature name from path (e.g., "src/features/themes/schemas.ts" -> "themes")
+  const featureMatch = filename.match(/features\/([^\/]+)\//);
+  const featureHint = featureMatch
+    ? `\nNOTE: This file is part of the "${featureMatch[1]}" feature. Check if "${featureMatch[1]}.md" exists before flagging docs.\n`
+    : '';
+
+  return `${contextSection}${docsSection}${featureHint}
 FILE: ${filename}
 
 === DIFF ===
 ${fileDiff}
 === END DIFF ===
+
+REMINDER: You MUST provide "fix_prompt" for HIGH and CRITICAL findings!
 
 Review this file and return findings as JSON.
 `;

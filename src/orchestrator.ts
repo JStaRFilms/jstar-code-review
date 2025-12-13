@@ -81,6 +81,66 @@ function loadArchitectureContext(): string {
     return contextDocs;
 }
 
+/**
+ * Load .jstar/config.json if it exists.
+ */
+interface JStarConfig {
+    docDrift?: {
+        enabled: boolean;
+        mappings: Array<{
+            sourcePath: string;
+            docsPath: string;
+            description: string;
+        }>;
+    };
+}
+
+function loadJStarConfig(): JStarConfig | null {
+    const configPath = path.join(process.cwd(), '.jstar/config.json');
+    if (fs.existsSync(configPath)) {
+        try {
+            const content = fs.readFileSync(configPath, 'utf-8');
+            console.log('⚙️ Loaded .jstar/config.json');
+            return JSON.parse(content) as JStarConfig;
+        } catch (e) {
+            console.log('⚠️ Failed to parse .jstar/config.json');
+            return null;
+        }
+    }
+    return null;
+}
+
+/**
+ * Scan the docs/ folder to find existing documentation files.
+ * Returns a map of feature names to their doc files.
+ * e.g., { "themes": "docs/features/themes.md", "auth": "docs/features/auth.md" }
+ */
+function loadDocsInventory(): Map<string, string> {
+    const inventory = new Map<string, string>();
+    const docsDir = path.join(process.cwd(), 'docs/features');
+
+    if (!fs.existsSync(docsDir)) {
+        console.log('📁 No docs/features directory found');
+        return inventory;
+    }
+
+    try {
+        const files = fs.readdirSync(docsDir);
+        for (const file of files) {
+            if (file.endsWith('.md')) {
+                // Extract feature name from filename (e.g., "themes.md" -> "themes")
+                const featureName = file.replace('.md', '');
+                inventory.set(featureName, `docs/features/${file}`);
+            }
+        }
+        console.log(`📚 Found ${inventory.size} existing feature docs: ${[...inventory.keys()].join(', ')}`);
+    } catch (e) {
+        console.log('⚠️ Failed to scan docs/features');
+    }
+
+    return inventory;
+}
+
 // ============================================================
 // GITHUB API
 // ============================================================
@@ -147,7 +207,7 @@ async function runTriage(files: string[], diffLength: number): Promise<TriageRes
     return object;
 }
 
-async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
+async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
     console.log(`🧠 Running Deep Review with ${ANALYST_MODEL}...`);
 
     // Estimate tokens (rough: 4 chars per token)
@@ -157,18 +217,18 @@ async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: s
     if (estimatedTokens <= TOKEN_LIMIT) {
         // Small diff: use single-shot review (original behavior)
         console.log(`📦 Diff size OK (${estimatedTokens} est. tokens), using single-shot review`);
-        return runSingleShotReview(filesToAudit, allFiles, diff, architectureContext);
+        return runSingleShotReview(filesToAudit, allFiles, diff, architectureContext, existingDocs);
     }
 
     // Large diff: use chunked map-reduce
     console.log(`📦 Diff too large (${estimatedTokens} est. tokens), using chunked review`);
-    return runChunkedReview(filesToAudit, diff, architectureContext);
+    return runChunkedReview(filesToAudit, diff, architectureContext, existingDocs);
 }
 
 /**
  * Original single-shot review for small diffs.
  */
-async function runSingleShotReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
+async function runSingleShotReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
     const enhancedSystemPrompt = architectureContext
         ? `${ANALYST_SYSTEM_PROMPT}\n\n--- PROJECT CONTEXT ---\n${architectureContext}`
         : ANALYST_SYSTEM_PROMPT;
@@ -177,7 +237,7 @@ async function runSingleShotReview(filesToAudit: string[], allFiles: string[], d
         model: groq(ANALYST_MODEL),
         schema: JStarReviewSchema,
         system: enhancedSystemPrompt,
-        prompt: buildAnalystUserPrompt(filesToAudit, allFiles, diff),
+        prompt: buildAnalystUserPrompt(filesToAudit, allFiles, diff, existingDocs),
     });
 
     return object;
@@ -223,7 +283,7 @@ function splitDiffByFile(diff: string): FileDiff[] {
 /**
  * Review large diffs by chunking per-file and aggregating.
  */
-async function runChunkedReview(filesToAudit: string[], diff: string, architectureContext: string): Promise<JStarReviewResult> {
+async function runChunkedReview(filesToAudit: string[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
     const fileDiffs = splitDiffByFile(diff);
     console.log(`🔪 Split into ${fileDiffs.length} file chunks`);
 
@@ -241,7 +301,7 @@ async function runChunkedReview(filesToAudit: string[], diff: string, architectu
     for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
         const batch = relevantDiffs.slice(i, i + BATCH_SIZE);
         const batchResults = await Promise.all(
-            batch.map(fd => reviewFileChunk(fd.filename, fd.diff, architectureContext))
+            batch.map(fd => reviewFileChunk(fd.filename, fd.diff, architectureContext, existingDocs))
         );
         allChunkResults.push(...batchResults);
 
@@ -257,13 +317,13 @@ async function runChunkedReview(filesToAudit: string[], diff: string, architectu
 /**
  * Review a single file chunk.
  */
-async function reviewFileChunk(filename: string, fileDiff: string, architectureContext: string): Promise<ChunkReviewResult> {
+async function reviewFileChunk(filename: string, fileDiff: string, architectureContext: string, existingDocs: string[]): Promise<ChunkReviewResult> {
     try {
         const { object } = await generateObject({
             model: groq(ANALYST_MODEL),
             schema: ChunkReviewSchema,
             system: CHUNK_REVIEW_SYSTEM_PROMPT,
-            prompt: buildChunkReviewPrompt(filename, fileDiff, architectureContext),
+            prompt: buildChunkReviewPrompt(filename, fileDiff, architectureContext, existingDocs),
         });
         return object;
     } catch (error) {
@@ -319,33 +379,113 @@ function aggregateChunkReviews(chunks: ChunkReviewResult[]): JStarReviewResult {
 // ============================================================
 
 function formatTriageSkipComment(triage: TriageResult): string {
-    return `## ✨ J Star Triage\n\n**Risk Level:** ${triage.risk_level}\n\n${triage.ignore_reason ? `> ${triage.ignore_reason}` : ''}\n\nNo critical files detected. Skipping deep review. 🎉`;
+    return `## ✨ J Star Triage
+
+**Risk Level:** ${triage.risk_level}
+
+${triage.ignore_reason ? `> ${triage.ignore_reason}` : ''}
+
+No critical files detected. Skipping deep review. 🎉`;
 }
 
 function formatReviewComment(review: JStarReviewResult): string {
     const score = review.summary.risk_score;
+    const verdict = review.summary.verdict;
+
+    // 1. Calculate Metrics
+    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, NITPICK: 0 };
+    for (const f of review.findings) {
+        counts[f.severity]++;
+    }
+    const totalFindings = review.findings.length;
+
+    // 2. Determine Mode
+    // High-Density Mode if >= 15 findings
+    const isHighDensity = totalFindings >= 15;
+
+    // 3. Header (Score + Summary Table)
     const icon = score > 80 ? '🟢' : score > 50 ? '🟡' : '🔴';
-    const icons: Record<string, string> = { CRITICAL: '🚨', HIGH: '🔶', MEDIUM: '🔹', NITPICK: '🔧' };
-
     let md = `# ${icon} J Star Code Audit\n\n`;
-    md += `| Score | Verdict | Tone |\n| :--- | :--- | :--- |\n`;
-    md += `| ${score}/100 | ${review.summary.verdict} | ${review.summary.tone.toUpperCase()} |\n\n---\n\n`;
 
-    if (review.findings.length === 0) {
-        md += `*No issues found. Ship it!* ✨\n`;
+    // Simple metrics table (Canonical Rule 2)
+    md += `| Score | Verdict | 🚨 Critical | 🔶 High | 🔹 Medium | 🔧 Nitpick |\n`;
+    md += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+    md += `| **${score}/100** | **${verdict}** | ${counts.CRITICAL || '-'} | ${counts.HIGH || '-'} | ${counts.MEDIUM || '-'} | ${counts.NITPICK || '-'} |\n\n`;
+
+    if (totalFindings === 0) {
+        md += `### ✨ No issues found. Ship it!\n\n---\n\n`;
+        md += `Powered by J Star Sentinel ⚡`;
+        return md;
     }
 
-    for (const finding of review.findings) {
-        const categoryIcon = finding.category === 'DOCUMENTATION' ? '📚 ' : '';
-        md += `### ${icons[finding.severity] || '🔹'} ${categoryIcon}${finding.category}: ${finding.file}\n`;
-        md += `> ${finding.message}\n\n`;
-        if (finding.fix_prompt) {
-            md += `<details><summary><b>🛠️ AI Fix Prompt</b></summary>\n\n\`\`\`text\n${finding.fix_prompt}\n\`\`\`\n</details>\n\n`;
+    // Group findings by file
+    const byFile = new Map<string, Finding[]>();
+    for (const f of review.findings) {
+        if (!byFile.has(f.file)) byFile.set(f.file, []);
+        byFile.get(f.file)!.push(f);
+    }
+
+    // Icons mapping
+    const sevIcons: Record<string, string> = { CRITICAL: '🚨', HIGH: '🔶', MEDIUM: '🔹', NITPICK: '🔧' };
+
+    // 4. Render Body based on Mode
+    if (isHighDensity) {
+        md += `**SUMMARY MODE** (High finding count detected)\n\n`;
+
+        for (const [file, findings] of byFile) {
+            md += `### 📄 ${file}\n\n`;
+            md += `| Sev | Cat | Issue | Fix |\n`;
+            md += `| :--- | :--- | :--- | :--- |\n`;
+
+            for (const f of findings) {
+                const title = f.title || f.message.substring(0, 50); // Fallback if title missing during migration
+                const desc = f.message;
+                const fix = f.fix_prompt ? `\`${f.fix_prompt.substring(0, 50)}${f.fix_prompt.length > 50 ? '...' : ''}\`` : 'See comments';
+                md += `| ${sevIcons[f.severity]} | ${f.category} | **${title}**<br>${desc} | ${fix} |\n`;
+            }
+            md += `\n`;
         }
-        md += `---\n`;
+
+    } else {
+        // Default Mode (Standard PR Review)
+        for (const [file, findings] of byFile) {
+            md += `## 📄 ${file}\n\n`;
+
+            for (const f of findings) {
+                const title = f.title || 'Untitled Issue';
+                const isAlertAndCritical = f.severity === 'CRITICAL';
+                const isAlertAndHigh = f.severity === 'HIGH';
+
+                // Rule 3: GitHub Alerts for CRITICAL/HIGH
+                if (isAlertAndCritical || isAlertAndHigh) {
+                    const alertType = isAlertAndCritical ? 'CAUTION' : 'WARNING';
+
+                    md += `> [!${alertType}]\n`;
+                    md += `> **${title}**\n`;
+                    md += `> ${f.message}\n>\n`;
+
+                    if (f.fix_prompt) {
+                        md += `> **Fix:**\n> \`\`\`\n> ${f.fix_prompt}\n> \`\`\`\n`;
+                    }
+                    md += `\n`; // End blockquote
+                } else {
+                    // Standard Rendering for Medium/Nitpick
+                    md += `### ${sevIcons[f.severity]} ${title}\n`;
+                    md += `**Category:** ${f.category}\n\n`;
+                    md += `${f.message}\n\n`;
+
+                    if (f.fix_prompt) {
+                        md += `**Fix:** \`${f.fix_prompt}\`\n\n`;
+                    }
+                }
+            }
+            md += `---\n\n`;
+        }
     }
 
-    return md + `\n*Powered by J Star Sentinel* ⚡`;
+    // 5. Footer (Canonical Rule 7)
+    md += `Powered by J Star Sentinel ⚡`;
+    return md;
 }
 
 // ============================================================
@@ -364,6 +504,9 @@ async function main() {
     console.log(`📦 Reviewing PR #${ctx.prNumber} in ${ctx.owner}/${ctx.repo}\n`);
 
     const architectureContext = loadArchitectureContext();
+    const docsInventory = loadDocsInventory();
+    const existingDocs = [...docsInventory.values()]; // Convert Map to array of doc paths
+
     const [diff, files] = await Promise.all([fetchPRDiff(ctx), fetchPRFiles(ctx)]);
     console.log(`📄 Found ${files.length} files (${diff.length} chars diff)\n`);
 
@@ -375,8 +518,8 @@ async function main() {
         return;
     }
 
-    // AI handles doc drift detection via the prompt
-    const review = await runDeepReview(triage.files_to_audit, files, diff, architectureContext);
+    // AI handles doc drift detection via the prompt - now with existing docs context
+    const review = await runDeepReview(triage.files_to_audit, files, diff, architectureContext, existingDocs);
     console.log(`\n🔬 Review:`, JSON.stringify(review, null, 2), '\n');
 
     await postComment(ctx, formatReviewComment(review));

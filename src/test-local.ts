@@ -5,9 +5,11 @@
 import { generateObject } from 'ai';
 import { createGroq } from '@ai-sdk/groq';
 import { config } from 'dotenv';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { TRIAGE_SYSTEM_PROMPT, ANALYST_SYSTEM_PROMPT, buildAnalystUserPrompt } from './prompts.js';
-import { TriageSchema, JStarReviewSchema } from './types.js';
+import { TriageSchema, JStarReviewSchema, type JStarReviewResult, type Finding } from './types.js';
 
 // Load .env.local
 config({ path: '.env.local' });
@@ -26,6 +28,8 @@ const ANALYST_MODEL = process.env.ANALYST_MODEL || 'llama-3.3-70b-versatile';
 // ============================================================
 
 const MOCK_FILES = [
+    'src/features/themes/schemas.ts',
+    'src/features/themes/actions.ts',
     'src/auth/login.ts',
     'src/api/users/route.ts',
     'src/components/Button.tsx',
@@ -33,14 +37,35 @@ const MOCK_FILES = [
     'README.md',
 ];
 
+// Simulated existing docs (to test false positive fix)
+const MOCK_EXISTING_DOCS = [
+    'docs/features/themes.md',
+    'docs/features/auth.md',
+];
+
 const MOCK_DIFF = `
+diff --git a/src/features/themes/schemas.ts b/src/features/themes/schemas.ts
+index 1234567..abcdefg 100644
+--- a/src/features/themes/schemas.ts
++++ b/src/features/themes/schemas.ts
+@@ -1,5 +1,15 @@
++import { z } from 'zod';
++
++export const ThemeSchema = z.object({
++  name: z.string(),
++  primaryColor: z.string(),
++  secondaryColor: z.string(),
++});
++
++export type Theme = z.infer<typeof ThemeSchema>;
+
 diff --git a/src/auth/login.ts b/src/auth/login.ts
 index 1234567..abcdefg 100644
 --- a/src/auth/login.ts
 +++ b/src/auth/login.ts
 @@ -1,10 +1,25 @@
 +import { db } from '../lib/database';
-+
+
  export async function login(req: Request) {
    const { email, password } = await req.json();
    
@@ -98,6 +123,110 @@ index aaaaaaa..bbbbbbb 100644
 `;
 
 // ============================================================
+// FORMAT REVIEW COMMENT (Copy from orchestrator for testing)
+// ============================================================
+
+function formatReviewComment(review: JStarReviewResult): string {
+    const score = review.summary.risk_score;
+    const verdict = review.summary.verdict;
+
+    // 1. Calculate Metrics
+    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, NITPICK: 0 };
+    for (const f of review.findings) {
+        counts[f.severity]++;
+    }
+    const totalFindings = review.findings.length;
+
+    // 2. Determine Mode
+    // High-Density Mode if >= 15 findings
+    const isHighDensity = totalFindings >= 15;
+
+    // 3. Header (Score + Summary Table)
+    const icon = score > 80 ? '🟢' : score > 50 ? '🟡' : '🔴';
+    let md = `# ${icon} J Star Code Audit\n\n`;
+
+    // Simple metrics table (Canonical Rule 2)
+    md += `| Score | Verdict | 🚨 Critical | 🔶 High | 🔹 Medium | 🔧 Nitpick |\n`;
+    md += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+    md += `| **${score}/100** | **${verdict}** | ${counts.CRITICAL || '-'} | ${counts.HIGH || '-'} | ${counts.MEDIUM || '-'} | ${counts.NITPICK || '-'} |\n\n`;
+
+    if (totalFindings === 0) {
+        md += `### ✨ No issues found. Ship it!\n\n---\n\n`;
+        md += `Powered by J Star Sentinel ⚡`;
+        return md;
+    }
+
+    // Group findings by file
+    const byFile = new Map<string, Finding[]>();
+    for (const f of review.findings) {
+        if (!byFile.has(f.file)) byFile.set(f.file, []);
+        byFile.get(f.file)!.push(f);
+    }
+
+    // Icons mapping
+    const sevIcons: Record<string, string> = { CRITICAL: '🚨', HIGH: '🔶', MEDIUM: '🔹', NITPICK: '🔧' };
+
+    // 4. Render Body based on Mode
+    if (isHighDensity) {
+        md += `**SUMMARY MODE** (High finding count detected)\n\n`;
+
+        for (const [file, findings] of byFile) {
+            md += `### 📄 ${file}\n\n`;
+            md += `| Sev | Cat | Issue | Fix |\n`;
+            md += `| :--- | :--- | :--- | :--- |\n`;
+
+            for (const f of findings) {
+                const title = f.title || f.message.substring(0, 50); // Fallback if title missing during migration
+                const desc = f.message;
+                const fix = f.fix_prompt ? `\`${f.fix_prompt.substring(0, 50)}${f.fix_prompt.length > 50 ? '...' : ''}\`` : 'See comments';
+                md += `| ${sevIcons[f.severity]} | ${f.category} | **${title}**<br>${desc} | ${fix} |\n`;
+            }
+            md += `\n`;
+        }
+
+    } else {
+        // Default Mode (Standard PR Review)
+        for (const [file, findings] of byFile) {
+            md += `## 📄 ${file}\n\n`;
+
+            for (const f of findings) {
+                const title = f.title || 'Untitled Issue';
+                const isAlertAndCritical = f.severity === 'CRITICAL';
+                const isAlertAndHigh = f.severity === 'HIGH';
+
+                // Rule 3: GitHub Alerts for CRITICAL/HIGH
+                if (isAlertAndCritical || isAlertAndHigh) {
+                    const alertType = isAlertAndCritical ? 'CAUTION' : 'WARNING';
+
+                    md += `> [!${alertType}]\n`;
+                    md += `> **${title}**\n`;
+                    md += `> ${f.message}\n>\n`;
+
+                    if (f.fix_prompt) {
+                        md += `> **Fix:**\n> \`\`\`\n> ${f.fix_prompt}\n> \`\`\`\n`;
+                    }
+                    md += `\n`; // End blockquote
+                } else {
+                    // Standard Rendering for Medium/Nitpick
+                    md += `### ${sevIcons[f.severity]} ${title}\n`;
+                    md += `**Category:** ${f.category}\n\n`;
+                    md += `${f.message}\n\n`;
+
+                    if (f.fix_prompt) {
+                        md += `**Fix:** \`${f.fix_prompt}\`\n\n`;
+                    }
+                }
+            }
+            md += `---\n\n`;
+        }
+    }
+
+    // 5. Footer (Canonical Rule 7)
+    md += `Powered by J Star Sentinel ⚡`;
+    return md;
+}
+
+// ============================================================
 // DRY RUN PIPELINE
 // ============================================================
 
@@ -119,6 +248,8 @@ async function runDryTest() {
 
     console.log('📁 Mock PR Files:');
     MOCK_FILES.forEach((f) => console.log(`   - ${f}`));
+    console.log(`\n📚 Mock Existing Docs (should NOT be flagged):`);
+    MOCK_EXISTING_DOCS.forEach((f) => console.log(`   - ${f}`));
     console.log(`\n📄 Mock Diff Length: ${MOCK_DIFF.length} chars\n`);
 
     // ──────────────────────────────────────────────────────────
@@ -167,7 +298,7 @@ Classify this PR and identify critical files to audit.
         model: groq(ANALYST_MODEL),
         schema: JStarReviewSchema,
         system: ANALYST_SYSTEM_PROMPT,
-        prompt: buildAnalystUserPrompt(triage.files_to_audit, MOCK_FILES, MOCK_DIFF),
+        prompt: buildAnalystUserPrompt(triage.files_to_audit, MOCK_FILES, MOCK_DIFF, MOCK_EXISTING_DOCS),
     });
     const reviewTime = Date.now() - reviewStart;
 
@@ -184,13 +315,51 @@ Classify this PR and identify critical files to audit.
         review.findings.forEach((f) => {
             const icon = f.severity === 'CRITICAL' ? '🚨' : f.severity === 'HIGH' ? '⚠️' : '📝';
             console.log(`\n   ${icon} [${f.severity}] ${f.file}:${f.line}`);
+            console.log(`      Title: ${f.title}`);
             console.log(`      Category: ${f.category}`);
             console.log(`      Message: ${f.message}`);
             if (f.fix_prompt) {
                 console.log(`      Fix Prompt: "${f.fix_prompt.substring(0, 60)}..."`);
+            } else {
+                console.log(`      ⚠️ Fix Prompt: MISSING!`);
             }
         });
     }
+
+    // ──────────────────────────────────────────────────────────
+    // CHECK FOR FALSE POSITIVES
+    // ──────────────────────────────────────────────────────────
+    console.log('\n─────────────────────────────────────────────────────────');
+    console.log('  🔍 FALSE POSITIVE CHECK');
+    console.log('─────────────────────────────────────────────────────────\n');
+
+    const docFindings = review.findings.filter(f => f.category === 'DOCUMENTATION');
+    const themesDocFindings = docFindings.filter(f => f.file.includes('themes'));
+
+    if (themesDocFindings.length > 0) {
+        console.log('   ❌ FALSE POSITIVE DETECTED!');
+        console.log('   Bot flagged themes/* as missing docs, but themes.md exists in MOCK_EXISTING_DOCS');
+        themesDocFindings.forEach(f => {
+            console.log(`      - ${f.file}: ${f.message}`);
+        });
+    } else {
+        console.log('   ✅ No false positives for themes/ (correctly recognized themes.md exists)');
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // RENDER FORMATTED OUTPUT
+    // ──────────────────────────────────────────────────────────
+    console.log('\n─────────────────────────────────────────────────────────');
+    console.log('  📝 FORMATTED OUTPUT (GitHub Markdown)');
+    console.log('─────────────────────────────────────────────────────────\n');
+
+    const formattedOutput = formatReviewComment(review);
+    console.log(formattedOutput);
+
+    // Save to file for easy viewing
+    const outputPath = path.join(process.cwd(), 'dry-run-output.md');
+    fs.writeFileSync(outputPath, formattedOutput);
+    console.log(`\n📁 Output saved to: ${outputPath}`);
 
     // ──────────────────────────────────────────────────────────
     // SUMMARY
