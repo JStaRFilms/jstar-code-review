@@ -10,7 +10,7 @@ Running a powerful LLM on every file is expensive and slow. Triage uses a fast/c
 - **Configurable:** Set `TRIAGE_MODEL` env var.
 
 ## Input
-- List of all files changed in the PR.
+- List of all files changed in the PR with status (e.g. `src/auth.ts [removed]`).
 - Diff length (for sizing estimation).
 
 ## Output (`TriageResult`)

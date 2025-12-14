@@ -134,3 +134,11 @@ Comment `/review` on any PR to trigger a review manually.
 ## Questions?
 
 Open an issue at [JStaRFilms/jstar-code-review](https://github.com/JStaRFilms/jstar-code-review/issues).
+
+---
+
+## Troubleshooting
+
+### Duplicate Runs
+If the bot runs twice on every PR, check that you don't have multiple workflow files triggering on `pull_request`.
+- Common Duplicate: `spawn-template.yml` if it was accidentally moved to `.github/workflows/`. Ensure templates stay in `.github/` (root) or are renamed/disabled.
