@@ -138,4 +138,37 @@ FinalScore = ((AuditedScore * AuditedCount) + (100 * SkippedCount)) / TotalCount
 
 ---
 
-*Last Updated: December 13, 2024*
+*Last Updated: December 14, 2024*
+
+---
+
+## Phase 6: Personality & Precision
+**Date:** Dec 14, 2024
+
+### What Happened
+1.  **Intelligent Deletion Handling:** The bot now understands `[removed]` files. It stops flagging "unused variables" in code you just deleted (hallucination fix), but will still catch *dangerous* deletions (like removing security checks).
+2.  **Emoji Reactions:** The bot is more expressive.
+    - `👀`: "I'm looking at it." (Review Start)
+    - `🚀`: "Looks good!" (Pass)
+    - `😕`: "I have questions/requests." (Request Changes)
+
+### Key Decisions
+- **Fallback Logic:** Automated triggers don't have a comment to react to. Added logic to fall back to reacting to the **PR description** itself, ensuring visual feedback regardless of trigger method.
+
+## Phase 7: Robustness & Self-Hosting
+**Date:** Dec 14, 2024
+
+### What Happened
+Fixed critical runtime safety issues identified by the bot's own self-audit:
+1.  **Unsafe Casting:** `fetchPRDiff` now validates API responses before using them.
+2.  **Error Handling:** Reaction failures are logged properly instead of swallowed.
+3.  **Duplicate Runs:** Identified and fixed an issue where `spawn-template.yml` could trigger duplicate workflows if misplaced in the `workflows/` directory.
+
+---
+
+## Commit Reference Table Update
+| Commit | Summary |
+| :--- | :--- |
+| `[latest]` | Fix deleted file logic and add emoji reactions |
+| `[latest]` | Fix duplicate workflow triggers |
+| `[latest]` | Harden runtime safety (orchestrator.ts) |

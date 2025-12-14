@@ -43,3 +43,8 @@ After Triage identifies risky files, the Analyst performs a thorough review usin
 ## Required Fields
 - **`title`:** Short, explicit, non-generic (e.g., "SQL Injection in Login").
 - **`fix_prompt`:** REQUIRED for CRITICAL, HIGH, and MEDIUM issues.
+
+## Intelligent Deletion Handling
+The Analyst is aware of file status (`[added]`, `[modified]`, `[removed]`).
+- **Removed Files:** It ignores "bugs" inside deleted code (e.g., unused variables in a file that is being deleted).
+- **Dangerous Deletions:** It WIIL flag if a deletion seems dangerous (e.g., removing auth middleware without replacement).
