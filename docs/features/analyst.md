@@ -11,6 +11,8 @@ After Triage identifies risky files, the Analyst performs a thorough review usin
 
 ## Input
 - The actual diff content of the `files_to_audit`.
+  - **Single-Shot Limit:** < 6000 tokens (approx).
+  - **Chunked:** Used automatically if > 6000 tokens.
 - Project context (`.jstar/architecture.md`, `.jstar/rules.md`).
 - Existing docs inventory (`docs/features/*.md`).
 
