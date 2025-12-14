@@ -120,8 +120,17 @@ review:
     GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
   with:
     triage_model: 'openai/gpt-oss-120b'      # Fast/cheap for initial classification
+    triage_model: 'openai/gpt-oss-120b'      # Fast/cheap for initial classification
     analyst_model: 'moonshotai/kimi-k2-instruct-0905'  # Powerful for deep review
 ```
+
+### Tuning Performance (Optional)
+
+If you are hitting rate limits (429 errors), you can tune the concurrency via **Secrets** or **Variables**:
+
+- `AI_CONCURRENCY`: Set to `1` (default) for safety, or `3-5` for speed.
+- `AI_MAX_RETRIES`: Default `3`.
+- `AI_RETRY_DELAY`: Default `2000` (ms).
 
 ---
 

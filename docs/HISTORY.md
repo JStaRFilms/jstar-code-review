@@ -172,3 +172,17 @@ Fixed critical runtime safety issues identified by the bot's own self-audit:
 | `[latest]` | Fix deleted file logic and add emoji reactions |
 | `[latest]` | Fix duplicate workflow triggers |
 | `[latest]` | Harden runtime safety (orchestrator.ts) |
+
+---
+
+## Phase 8: Stability under Pressure
+**Date:** Dec 14, 2024
+
+### What Happened
+Stabilized the bot against **Rate Limit Exceeded** crashes when using lower-tier API keys (e.g., Kimi 10k TPM).
+
+### Key Decisions
+1.  **Configurable Concurrency:** Added `AI_CONCURRENCY` (default: 1) to allow users to throttle the bot down to sequential processing or scale it up.
+2.  **Smart Delay:** Introduced an artificial delay between file chunks, but *only* when running in sequential mode. This prioritizes stability for free-tier users while unblocking speed for pro users.
+3.  **Recursion Rewrite:** Fixed a critical bug where the retry logic wasn't awaiting its own recursive calls.
+4.  **Conservative Limits:** Reduced the single-shot token limit from 8000 to 6000 to provide a safer buffer against hard API bursts.
