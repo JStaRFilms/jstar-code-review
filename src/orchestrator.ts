@@ -255,7 +255,7 @@ async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: s
 
     // Estimate tokens (rough: 4 chars per token)
     const estimatedTokens = Math.ceil(diff.length / 4);
-    const TOKEN_LIMIT = 8000; // Safe buffer under 10K TPM
+    const TOKEN_LIMIT = 6000; // Reduced from 8000 to leave more headroom for 10k TPM
 
     if (estimatedTokens <= TOKEN_LIMIT) {
         // Small diff: use single-shot review (original behavior)
@@ -312,11 +312,13 @@ async function runSingleShotReview(filesToAudit: string[], allFiles: PrFile[], d
 
     const formattedFiles = allFiles.map(f => `${f.filename} [${f.status}]`);
 
-    const { object } = await generateObject({
-        model: groq(ANALYST_MODEL),
-        schema: JStarReviewSchema,
-        system: enhancedSystemPrompt,
-        prompt: buildAnalystUserPrompt(filesToAudit, formattedFiles, diff, existingDocs),
+    const { object } = await callAIWithRetry(async () => {
+        return await generateObject({
+            model: groq(ANALYST_MODEL),
+            schema: JStarReviewSchema,
+            system: enhancedSystemPrompt,
+            prompt: buildAnalystUserPrompt(filesToAudit, formattedFiles, diff, existingDocs),
+        });
     });
 
     return object;
@@ -373,8 +375,8 @@ async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff
 
     console.log(`🎯 Reviewing ${relevantDiffs.length} critical files`);
 
-    // Review each file chunk (parallel in batches of 3 to not exceed RPM)
-    const BATCH_SIZE = 3;
+    // Review each file chunk (Sequential to respect 10k TPM)
+    const BATCH_SIZE = 1;
     const allChunkResults: ChunkReviewResult[] = [];
 
     for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
@@ -389,7 +391,8 @@ async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff
         allChunkResults.push(...batchResults);
 
         if (i + BATCH_SIZE < relevantDiffs.length) {
-            console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files...`);
+            console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files... taking a breath 🧘`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay to cool down TPM
         }
     }
 
@@ -398,19 +401,43 @@ async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff
 }
 
 /**
+ * Helper: Retry AI calls with exponential backoff on rate limits.
+ */
+async function callAIWithRetry<T>(operation: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+    try {
+        return await operation();
+    } catch (error: any) {
+        // Check for Groq/OpenAI rate limit errors (429, 'limit', 'token')
+        const isRateLimit = error.statusCode === 429 ||
+            error.message?.includes('rate limit') ||
+            error.message?.includes('token') ||
+            error.code === 'rate_limit_exceeded';
+
+        if (retries > 0 && isRateLimit) {
+            console.log(`   🔸 Rate limit hit. Retrying in ${delay / 1000}s... (${retries} attempts left)`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return callAIWithRetry(operation, retries - 1, delay * 2);
+        }
+        throw error;
+    }
+}
+
+/**
  * Review a single file chunk.
  */
 async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[]): Promise<ChunkReviewResult> {
     try {
-        const { object } = await generateObject({
-            model: groq(ANALYST_MODEL),
-            schema: ChunkReviewSchema,
-            system: CHUNK_REVIEW_SYSTEM_PROMPT,
-            prompt: buildChunkReviewPrompt(filename, fileDiff, status, architectureContext, existingDocs),
+        return await callAIWithRetry(async () => {
+            const { object } = await generateObject({
+                model: groq(ANALYST_MODEL),
+                schema: ChunkReviewSchema,
+                system: CHUNK_REVIEW_SYSTEM_PROMPT,
+                prompt: buildChunkReviewPrompt(filename, fileDiff, status, architectureContext, existingDocs),
+            });
+            return object;
         });
-        return object;
     } catch (error) {
-        console.log(`⚠️ Failed to review ${filename}, skipping`);
+        console.log(`⚠️ Failed to review ${filename} after retries, skipping. Error: ${(error as any).message}`);
         return { file: filename, findings: [], quality_score: 0 };
     }
 }
