@@ -186,3 +186,46 @@ Stabilized the bot against **Rate Limit Exceeded** crashes when using lower-tier
 2.  **Smart Delay:** Introduced an artificial delay between file chunks, but *only* when running in sequential mode. This prioritizes stability for free-tier users while unblocking speed for pro users.
 3.  **Recursion Rewrite:** Fixed a critical bug where the retry logic wasn't awaiting its own recursive calls.
 4.  **Conservative Limits:** Reduced the single-shot token limit from 8000 to 6000 to provide a safer buffer against hard API bursts.
+
+---
+
+## Phase 9: Dynamic Token Budget
+**Date:** Dec 14, 2024
+
+### The Problem
+Despite implementing chunked map-reduce and truncation, the bot still crashed with "Request too large" (14k tokens requested, 10k limit).
+
+**Root Cause:** Static `MAX_CHUNK_SIZE = 30000` chars (~7.5k tokens) didn't account for:
+- System prompt overhead (~300 tokens)
+- Architecture context (~275 tokens)  
+- Existing docs list (~50 tokens)
+- Required output buffer (~2000 tokens)
+
+Total: 8k input + 2k output = **10k+ TPM** 🚨
+
+### The Solution
+Replaced static truncation with **dynamic token budget calculation**:
+
+```typescript
+// 1. Measure overhead first
+const fixedOverhead = systemPromptTokens + contextTokens + docsTokens + boilerplateTokens;
+
+// 2. Allocate remaining budget to diff
+const diffBudgetTokens = Math.max(TOTAL_TOKEN_BUDGET - fixedOverhead, 1000);
+const maxDiffChars = diffBudgetTokens * CHARS_PER_TOKEN;
+
+// 3. Truncate diff to fit
+if (fileDiff.length > maxDiffChars) {
+    safeDiff = fileDiff.substring(0, maxDiffChars) + '\n... [Truncated]';
+}
+```
+
+### Key Benefits
+- **Adaptive:** Small context → more room for diff. Large context → auto-shrinks diff budget.
+- **Safe:** Minimum 1000 tokens for diff ensures meaningful review.
+- **Observable:** Logs token budget split for debugging.
+
+---
+
+*Last Updated: December 14, 2024*
+
