@@ -132,6 +132,16 @@ Edit `src/prompts.ts` to adjust:
 - **Focus Areas** — What file types to prioritize
 - **Ignore Rules** — What to skip (lockfiles, images, etc.)
 
+### 🧠 Train Your Bot (Repository Context)
+
+Make the bot smarter by adding a `.jstar/` folder to the root of your repository. The bot reads these files to understand your specific context:
+
+| File | Purpose | Example Content |
+|------|---------|-----------------|
+| `.jstar/architecture.md` | Explains your tech stack. | "We use Next.js 15, Prisma, and Tailwind v4. Avoid raw CSS." |
+| `.jstar/rules.md` | Hard coding laws. | "1. No `any` types.\n2. Always use `zod` for API validation." |
+| `.jstar/memory.md` | Persistent memory of past mistakes. | "Recurring issue: SQL injection in auth. Check strictly." |
+
 ## 📊 Output Example
 
 ```markdown
