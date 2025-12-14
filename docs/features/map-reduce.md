@@ -17,12 +17,14 @@ const fileDiffs = splitDiffByFile(diff);
 ### 2. Map (Review Each File)
 Each file chunk is reviewed independently in parallel batches:
 ```typescript
-const BATCH_SIZE = 3; // Respects RPM limits
+const BATCH_SIZE = parseInt(process.env.AI_CONCURRENCY) || 1; // Default 1 (Sequential)
 for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
   const batch = relevantDiffs.slice(i, i + BATCH_SIZE);
   const batchResults = await Promise.all(batch.map(fd => reviewFileChunk(...)));
 }
 ```
+
+Configurable via `AI_CONCURRENCY`. Set to `1` for strict rate limits (default), or `3-5` for higher tiers.
 
 ### 3. Reduce (Aggregate)
 All chunk results are combined into a final `JStarReviewResult`:

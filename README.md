@@ -75,7 +75,20 @@ Go to your repo → Settings → Secrets and variables → Actions:
 
 > `GITHUB_TOKEN` is automatically provided by GitHub Actions.
 
-#### 3. Done!
+> `GITHUB_TOKEN` is automatically provided by GitHub Actions.
+
+#### 3. (Optional) Tune AI Performance
+
+Add these optional secrets or variables to customize the review process:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_CONCURRENCY` | `1` | Number of files to review in parallel. Set to `1` for low-tier (10k TPM) keys. Increase to `3-5` for high-tier. |
+| `AI_MAX_RETRIES` | `3` | Number of times to retry a failed/rate-limited AI call. |
+| `AI_RETRY_DELAY` | `2000` | Initial delay in ms before retrying (exponential backoff applied). |
+| `AI_BACKOFF_FACTOR` | `2` | Multiplier for delay after each retry. |
+
+#### 4. Done!
 
 Open a PR and watch J Star review it.
 
