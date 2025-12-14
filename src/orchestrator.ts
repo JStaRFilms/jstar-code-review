@@ -1,6 +1,6 @@
 // src/orchestrator.ts
 // The Runner: J Star Code Review Orchestrator
-// Lean version: ~200 lines. No regex. Pure AI reasoning.
+// Hybrid Deterministic: Detective (AST) → Judge (LLM)
 
 import { generateObject } from 'ai';
 import { createGroq } from '@ai-sdk/groq';
@@ -10,7 +10,9 @@ import {
     ANALYST_SYSTEM_PROMPT,
     buildAnalystUserPrompt,
     CHUNK_REVIEW_SYSTEM_PROMPT,
-    buildChunkReviewPrompt
+    buildChunkReviewPrompt,
+    GROUNDED_JUDGE_SYSTEM_PROMPT,
+    buildGroundedChunkPrompt,
 } from './prompts.js';
 import {
     TriageSchema,
@@ -23,6 +25,14 @@ import {
     type Finding,
     type Env,
 } from './types.js';
+import {
+    analyzeFile,
+    formatReportsForLLM,
+    parsePackageJson,
+    getApiHints,
+    type AnalysisReport,
+    type PackageJson,
+} from './core/analysis/index.js';
 
 // Initialize Groq provider
 const groq = createGroq({
@@ -71,7 +81,8 @@ interface GitHubContext {
     prNumber: number;
     commentId?: number;
     octokit: Octokit;
-    config: AIConfig; // Pass AI config through context
+    config: AIConfig;
+    packageJson?: PackageJson; // Loaded for Detective context
 }
 
 interface PrFile {
@@ -291,7 +302,7 @@ async function runTriage(files: PrFile[], diffLength: number): Promise<TriageRes
     return object;
 }
 
-async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<JStarReviewResult> {
+async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[], config: AIConfig, packageJson?: PackageJson): Promise<JStarReviewResult> {
     console.log(`🧠 Running Deep Review with ${ANALYST_MODEL}...`);
 
     // Estimate tokens (rough: 4 chars per token)
@@ -308,7 +319,7 @@ async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: s
     }
 
     console.log(`📦 Diff too large (${estimatedTokens} est. tokens), using chunked review`);
-    const rawResult = await runChunkedReview(filesToAudit, allFiles, diff, architectureContext, existingDocs, config);
+    const rawResult = await runChunkedReview(filesToAudit, allFiles, diff, architectureContext, existingDocs, config, packageJson);
     return adjustScoreForSkippedFiles(rawResult, filesToAudit.length, allFiles.length);
 }
 
@@ -392,7 +403,7 @@ function splitDiffByFile(diff: string): FileDiff[] {
     return fileDiffs;
 }
 
-async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<JStarReviewResult> {
+async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[], config: AIConfig, packageJson?: PackageJson): Promise<JStarReviewResult> {
     const fileDiffs = splitDiffByFile(diff);
     console.log(`🔪 Split into ${fileDiffs.length} file chunks`);
 
@@ -411,14 +422,12 @@ async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff
             batch.map(fd => {
                 const fileInfo = allFiles.find(f => f.filename === fd.filename);
                 const status = fileInfo?.status || 'modified';
-                return reviewFileChunk(fd.filename, fd.diff, status, architectureContext, existingDocs, config);
+                return reviewFileChunk(fd.filename, fd.diff, status, architectureContext, existingDocs, config, packageJson);
             })
         );
         allChunkResults.push(...batchResults);
 
         // DELAY OPTIMIZATION (Audit Item 3)
-        // Only delay if we have more files to process AND we are running in strict sequential mode (low tier).
-        // High concurrency tiers (3+) likely don't need this artificial delay as much, or the throughput matters more.
         if (i + BATCH_SIZE < relevantDiffs.length && config.concurrency === 1) {
             console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files... taking a breath 🧘`);
             await new Promise(resolve => setTimeout(resolve, config.retryDelay));
@@ -428,43 +437,96 @@ async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff
     return aggregateChunkReviews(allChunkResults);
 }
 
-async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<ChunkReviewResult> {
+async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[], config: AIConfig, packageJson?: PackageJson): Promise<ChunkReviewResult> {
     try {
         // ─────────────────────────────────────────────────────
-        // DYNAMIC TOKEN BUDGET CALCULATION
-        // Prevents "Request too large" crashes by measuring context
-        // overhead first, then allocating remaining budget to diff.
+        // STEP 1: RUN THE DETECTIVE (Static Analysis)
+        // Extracts deterministic facts: context, imports, violations
         // ─────────────────────────────────────────────────────
-        const TOTAL_TOKEN_BUDGET = 8000; // Safe limit for 10k TPM (leaves 2k for output)
+        let detectiveReport = '';
+        let apiHintsStr = '';
+
+        // Only run Detective on TypeScript/JavaScript files
+        const isAnalyzable = /\.(tsx?|jsx?|mjs|cjs)$/.test(filename);
+
+        if (isAnalyzable && status !== 'removed') {
+            try {
+                // Extract code from diff (lines starting with + minus the +)
+                const addedLines = fileDiff
+                    .split('\n')
+                    .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+                    .map(line => line.substring(1))
+                    .join('\n');
+
+                if (addedLines.length > 0) {
+                    const report = analyzeFile(addedLines, filename, packageJson);
+                    detectiveReport = JSON.stringify(report, null, 2);
+
+                    // Log violations for debugging
+                    if (report.violations.length > 0) {
+                        console.log(`🔍 Detective found ${report.violations.length} violation(s) in ${filename}`);
+                        report.violations.forEach(v => console.log(`   - Line ${v.line}: [${v.code}] ${v.symbol}`));
+                    }
+                }
+            } catch (detectiveError) {
+                console.log(`⚠️ Detective failed on ${filename}: ${(detectiveError as Error).message}`);
+                detectiveReport = '{ "error": "Static analysis failed, proceed with LLM review only" }';
+            }
+
+            // Get API version hints
+            if (packageJson) {
+                const hints = getApiHints(packageJson);
+                if (hints.size > 0) {
+                    apiHintsStr = Array.from(hints.entries())
+                        .map(([pkg, hint]) => `${pkg}: ${hint}`)
+                        .join('\n');
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────
+        // STEP 2: DYNAMIC TOKEN BUDGET CALCULATION
+        // ─────────────────────────────────────────────────────
+        const TOTAL_TOKEN_BUDGET = 8000;
         const CHARS_PER_TOKEN = 4;
 
-        // 1. Calculate fixed overhead (context, docs, prompts)
-        const systemPromptTokens = Math.ceil(CHUNK_REVIEW_SYSTEM_PROMPT.length / CHARS_PER_TOKEN);
+        // Use grounded prompt if Detective ran, else fallback to legacy
+        const useGroundedMode = detectiveReport.length > 0;
+        const systemPrompt = useGroundedMode ? GROUNDED_JUDGE_SYSTEM_PROMPT : CHUNK_REVIEW_SYSTEM_PROMPT;
+
+        const systemPromptTokens = Math.ceil(systemPrompt.length / CHARS_PER_TOKEN);
         const contextTokens = Math.ceil(architectureContext.length / CHARS_PER_TOKEN);
         const docsTokens = Math.ceil(existingDocs.join('\n').length / CHARS_PER_TOKEN);
-        const boilerplateTokens = 150; // filename, status, markers, etc.
+        const detectiveTokens = Math.ceil(detectiveReport.length / CHARS_PER_TOKEN);
+        const hintsTokens = Math.ceil(apiHintsStr.length / CHARS_PER_TOKEN);
+        const boilerplateTokens = 200;
 
-        const fixedOverhead = systemPromptTokens + contextTokens + docsTokens + boilerplateTokens;
-
-        // 2. Calculate remaining budget for diff (min 1000 tokens)
+        const fixedOverhead = systemPromptTokens + contextTokens + docsTokens + detectiveTokens + hintsTokens + boilerplateTokens;
         const diffBudgetTokens = Math.max(TOTAL_TOKEN_BUDGET - fixedOverhead, 1000);
         const maxDiffChars = diffBudgetTokens * CHARS_PER_TOKEN;
 
-        console.log(`📊 Token Budget: ${fixedOverhead} overhead + ${diffBudgetTokens} for diff (max ${maxDiffChars} chars)`);
+        console.log(`📊 Token Budget: ${fixedOverhead} overhead + ${diffBudgetTokens} for diff | Detective: ${useGroundedMode ? 'ON' : 'OFF'}`);
 
-        // 3. Truncate diff to fit budget
+        // Truncate diff to fit budget
         let safeDiff = fileDiff;
         if (fileDiff.length > maxDiffChars) {
             console.log(`✂️ Truncating ${filename}: ${fileDiff.length} → ${maxDiffChars} chars`);
             safeDiff = fileDiff.substring(0, maxDiffChars) + '\n\n... [Truncated for token limit]';
         }
 
+        // ─────────────────────────────────────────────────────
+        // STEP 3: CALL THE JUDGE (LLM with grounded context)
+        // ─────────────────────────────────────────────────────
+        const userPrompt = useGroundedMode
+            ? buildGroundedChunkPrompt(detectiveReport, filename, safeDiff, status, architectureContext, existingDocs, apiHintsStr)
+            : buildChunkReviewPrompt(filename, safeDiff, status, architectureContext, existingDocs);
+
         return await callAIWithRetry(async () => {
             const { object } = await generateObject({
                 model: groq(ANALYST_MODEL),
                 schema: ChunkReviewSchema,
-                system: CHUNK_REVIEW_SYSTEM_PROMPT,
-                prompt: buildChunkReviewPrompt(filename, safeDiff, status, architectureContext, existingDocs),
+                system: systemPrompt,
+                prompt: userPrompt,
             });
             return object;
         }, config);
@@ -601,8 +663,8 @@ function formatReviewComment(review: JStarReviewResult): string {
 // ============================================================
 
 async function main() {
-    console.log('🚀 J Star Reviewer Initialized');
-    console.log('================================\n');
+    console.log('🚀 J Star Reviewer Initialized (Hybrid Mode)');
+    console.log('=============================================\n');
 
     const env = validateEnv();
     const config = parseAIConfig(env);
@@ -612,9 +674,20 @@ async function main() {
 
     console.log(`📦 Reviewing PR #${ctx.prNumber} in ${ctx.owner}/${ctx.repo}\n`);
 
-    const architectureContext = await loadArchitectureContext(ctx);
-    const docsInventory = await loadDocsInventory(ctx);
+    // Load context in parallel
+    const [architectureContext, docsInventory, packageJsonContent] = await Promise.all([
+        loadArchitectureContext(ctx),
+        loadDocsInventory(ctx),
+        fetchRemoteFile(ctx, 'package.json'),
+    ]);
     const existingDocs = [...docsInventory.values()];
+
+    // Parse package.json for Detective version awareness
+    let packageJson: PackageJson | undefined;
+    if (packageJsonContent) {
+        packageJson = parsePackageJson(packageJsonContent);
+        console.log(`📋 Loaded package.json for Detective context`);
+    }
 
     const [diff, files] = await Promise.all([fetchPRDiff(ctx), fetchPRFiles(ctx)]);
     console.log(`📄 Found ${files.length} files (${diff.length} chars diff)\n`);
@@ -628,7 +701,7 @@ async function main() {
         return;
     }
 
-    const review = await runDeepReview(triage.files_to_audit, files, diff, architectureContext, existingDocs, config);
+    const review = await runDeepReview(triage.files_to_audit, files, diff, architectureContext, existingDocs, config, packageJson);
     console.log(`\n🔬 Review:`, JSON.stringify(review, null, 2), '\n');
 
     await postComment(ctx, formatReviewComment(review));
@@ -636,7 +709,7 @@ async function main() {
     const finalReaction = review?.summary?.verdict === 'REQUEST_CHANGES' ? 'confused' : 'rocket';
     await addReaction(ctx, finalReaction);
 
-    console.log('\n🏁 J Star Review Complete!');
+    console.log('\n🏁 J Star Review Complete (Hybrid Detective → Judge)!');
 }
 
 main().catch((error) => {

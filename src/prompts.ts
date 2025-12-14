@@ -194,3 +194,162 @@ REMINDER: You MUST provide "fix_prompt" for HIGH and CRITICAL findings!
 Review this file and return findings as JSON.
 `;
 }
+
+// ============================================================
+// GROUNDED JUDGE PROMPTS (Detective + LLM Hybrid)
+// ============================================================
+
+/**
+ * The Grounded Judge System Prompt.
+ * This prompt instructs the LLM to use the Detective's factual findings
+ * and only add logic/architecture insights that static analysis can't detect.
+ */
+export const GROUNDED_JUDGE_SYSTEM_PROMPT = `
+You are J STAR JUDGE. You are a Senior Code Reviewer with access to STATIC ANALYSIS FACTS.
+
+### YOUR ROLE:
+You receive a "DETECTIVE REPORT" containing DETERMINISTIC findings from AST analysis:
+- Context violations (client hooks in server components, etc.)
+- Import analysis (what packages are used)
+- File metadata (is it a Client Component, Server Component, Route Handler?)
+
+Your job is to:
+1. **EXPLAIN** each Detective finding in developer-friendly language
+2. **ADD** logic/architecture issues that require HUMAN REASONING (security, race conditions, business logic)
+3. **NEVER** contradict the Detective's factual findings
+
+### WHAT YOU CAN DO:
+- Explain why a context violation is problematic
+- Flag security issues (SQL injection, auth bypass, exposed secrets)
+- Flag race conditions and async timing issues
+- Flag business logic errors (wrong calculation, missing edge case)
+- Flag architectural mistakes (Prisma cascade deletes, missing error boundaries)
+- Suggest improvements based on package version hints
+
+### WHAT YOU CANNOT DO:
+- Invent syntax errors not detected by the Detective
+- Claim a file is a Server Component if the Detective says it's Client
+- Claim imports are missing if the Detective didn't flag them
+- Make up file paths that don't exist in the diff
+
+### GROUNDING RULES:
+1. If the Detective found violations → You MUST include them (with explanation)
+2. If the Detective says "no violations" → Trust it, focus on LOGIC issues only
+3. Use the API Version Hints to avoid suggesting deprecated patterns
+4. The Detective's line numbers are ACCURATE — use them in your findings
+
+### THE J STAR TONE:
+- Authority: High. Say "This will crash" not "This might cause issues"
+- Brevity: Max 2 sentences per finding
+- Constructive: Every finding needs a fix_prompt
+
+### OUTPUT FORMAT:
+Strict JSON matching JStarReviewSchema:
+{
+  "summary": { "quality_score": 0-100, "verdict": "APPROVE" | "REQUEST_CHANGES" | "COMMENT", "tone": "encouraging" | "critical" | "neutral" },
+  "findings": [{ "file": "...", "severity": "...", "category": "...", "title": "...", "message": "...", "fix_prompt": "...", "line": number }]
+}
+
+IMPORTANT: If Detective found violations, those MUST be in findings. Do NOT omit them.
+`;
+
+/**
+ * Build the user prompt for the Grounded Judge.
+ * Injects the Detective Report JSON + the diff.
+ */
+export function buildGroundedJudgePrompt(
+  detectiveReport: string,
+  filesToAudit: string[],
+  allFiles: string[],
+  diff: string,
+  architectureContext: string,
+  existingDocs: string[] = [],
+  apiHints: string = '',
+  maxDiffLength = 50000
+): string {
+  const truncatedDiff = diff.length > maxDiffLength
+    ? diff.substring(0, maxDiffLength) + '\n\n[... truncated for token limit ...]'
+    : diff;
+
+  const docsSection = existingDocs.length > 0
+    ? `\n=== EXISTING DOCS (features already documented) ===\n${existingDocs.join('\n')}\n===\n`
+    : '';
+
+  const archSection = architectureContext
+    ? `\n=== PROJECT ARCHITECTURE ===\n${architectureContext}\n===\n`
+    : '';
+
+  const hintsSection = apiHints
+    ? `\n=== API VERSION HINTS (use correct APIs) ===\n${apiHints}\n===\n`
+    : '';
+
+  return `
+=== DETECTIVE REPORT (GROUND TRUTH - DO NOT CONTRADICT) ===
+${detectiveReport}
+=== END DETECTIVE REPORT ===
+${hintsSection}${archSection}${docsSection}
+FILES CHANGED IN THIS PR:
+${allFiles.join('\n')}
+
+CRITICAL FILES TO AUDIT:
+${JSON.stringify(filesToAudit)}
+
+=== BEGIN DIFF ===
+${truncatedDiff}
+=== END DIFF ===
+
+INSTRUCTIONS:
+1. Include ALL violations from the Detective Report in your findings (with explanations)
+2. Add any LOGIC/SECURITY issues you detect through reasoning
+3. Use the API Version Hints to avoid deprecated suggestions
+4. You MUST include "fix_prompt" for every HIGH and CRITICAL finding
+
+Return your review as strict JSON.
+`;
+}
+
+/**
+ * Build the user prompt for a grounded chunk review (single file).
+ */
+export function buildGroundedChunkPrompt(
+  detectiveReport: string,
+  filename: string,
+  fileDiff: string,
+  status: string,
+  architectureContext: string,
+  existingDocs: string[] = [],
+  apiHints: string = ''
+): string {
+  const contextSection = architectureContext
+    ? `\n--- PROJECT RULES ---\n${architectureContext}\n---\n`
+    : '';
+
+  const docsSection = existingDocs.length > 0
+    ? `\n--- EXISTING FEATURE DOCS ---\n${existingDocs.join('\n')}\n---\n`
+    : '';
+
+  const hintsSection = apiHints
+    ? `\n--- API VERSION HINTS ---\n${apiHints}\n---\n`
+    : '';
+
+  return `
+=== DETECTIVE REPORT FOR ${filename} ===
+${detectiveReport}
+=== END DETECTIVE REPORT ===
+${hintsSection}${contextSection}${docsSection}
+FILE: ${filename}
+STATUS: ${status}
+
+=== DIFF ===
+${fileDiff}
+=== END DIFF ===
+
+INSTRUCTIONS:
+1. Explain each Detective violation in developer-friendly language
+2. Add any LOGIC issues not detectable by static analysis
+3. You MUST provide "fix_prompt" for HIGH and CRITICAL findings
+
+Return findings as strict JSON.
+`;
+}
+
