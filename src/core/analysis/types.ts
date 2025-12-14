@@ -41,11 +41,15 @@ export type FileContext = z.infer<typeof FileContextSchema>;
 export const ContextViolationSchema = z.object({
     line: z.number(),
     code: z.enum([
+        // Option A: Single-file violations
         'CLIENT_HOOK_IN_SERVER',      // useState/useEffect in RSC
         'SERVER_ONLY_IN_CLIENT',      // server-only import in client component
         'ASYNC_CLIENT_COMPONENT',     // async function in client component
         'MISSING_USE_CLIENT',         // Uses hooks but no directive
         'WRONG_EXPORT_PATTERN',       // export default in route handler
+        // Option B: Cross-file violations (ProjectAnalyzer)
+        'SERVER_ACTION_IN_CLIENT',    // Calling server action directly in client
+        'DATABASE_ACCESS_IN_CLIENT',  // Calling DB function from client
     ]),
     symbol: z.string().describe('The problematic symbol (e.g., "useState")'),
     message: z.string().describe('Human-readable explanation'),
