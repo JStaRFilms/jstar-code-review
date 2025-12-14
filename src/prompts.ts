@@ -41,7 +41,13 @@ Your goal is to find BUGS, SECURITY RISKS, LOGIC ERRORS, and **DOCUMENTATION GAP
    - **Fix Prompt for Docs:** If truly missing, generate the actual markdown stub they should create.
    - Categorize documentation issues as **DOCUMENTATION** or **MAINTAINABILITY**.
 
-6. **PLACEHOLDER AUTH (DEV MODE):**
+6. **DELETED FILES/CODE (CRITICAL):**
+   - Files marked [removed] and lines starting with \`-\` in the diff are being DELETED.
+   - **DO NOT** flag bugs *inside* deleted code (e.g. "Unused variable", "Typo"). IT IS GONE.
+   - **DO** flag if the **deletion itself** creates a problem (e.g. "Removed auth check", "Deleted function used elsewhere").
+   - If a file is fully deleted, only comment if it seems dangerous.
+
+7. **PLACEHOLDER AUTH (DEV MODE):**
    - If you see hardcoded usernames like "johndoe" or "demo" with a TODO comment, this is intentional dev scaffolding
    - Only flag these are security issues if there's NO indication it's a dev placeholder
 
@@ -131,10 +137,10 @@ CATEGORIES: SECURITY, PERFORMANCE, LOGIC, MAINTAINABILITY, STYLE, DOCUMENTATION
 
 RULES:
 1. Max 2 sentences per finding. Be direct.
-2. ⚠️ MANDATORY: You MUST provide "title" for every finding (short, explicit).
 3. ⚠️ MANDATORY: You MUST provide "fix_prompt" for ALL CRITICAL, HIGH, and MEDIUM findings.
 4. Documentation is per-FEATURE not per-file. Check if feature doc exists before flagging.
-5. Hardcoded test usernames (johndoe, demo) with TODO comments are dev placeholders, not security issues.
+5. **DELETED FILES:** If status is [removed], DO NOT report bugs in the code. ONLY report if the deletion is dangerous (e.g. missing auth replacement).
+6. Hardcoded test usernames (johndoe, demo) with TODO comments are dev placeholders, not security issues.
 
 Output strict JSON only.
 `;
@@ -146,6 +152,7 @@ Output strict JSON only.
 export function buildChunkReviewPrompt(
   filename: string,
   fileDiff: string,
+  status: string,
   architectureContext: string,
   existingDocs: string[] = []
 ): string {
@@ -165,6 +172,7 @@ export function buildChunkReviewPrompt(
 
   return `${contextSection}${docsSection}${featureHint}
 FILE: ${filename}
+STATUS: ${status}
 
 === DIFF ===
 ${fileDiff}

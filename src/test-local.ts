@@ -35,6 +35,7 @@ const MOCK_FILES = [
     'src/components/Button.tsx',
     'styles/globals.css',
     'README.md',
+    'src/deprecated.ts [removed]',
 ];
 
 // Simulated existing docs (to test false positive fix)
@@ -58,6 +59,18 @@ index 1234567..abcdefg 100644
 +});
 +
 +export type Theme = z.infer<typeof ThemeSchema>;
+
+diff --git a/src/deprecated.ts b/src/deprecated.ts
+deleted file mode 100644
+index abcdefg..0000000
+--- a/src/deprecated.ts
++++ /dev/null
+@@ -1,5 +1,0 @@
+- export const API_KEY = "sk-1234567890"; // Hardcoded secret!
+- 
+- function oldLogic() {
+-   console.log("This is old");
+- }
 
 diff --git a/src/auth/login.ts b/src/auth/login.ts
 index 1234567..abcdefg 100644
