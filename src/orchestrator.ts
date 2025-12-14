@@ -196,16 +196,26 @@ async function postComment(ctx: GitHubContext, body: string): Promise<void> {
     console.log('💬 Comment posted to PR.');
 }
 
-async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket') {
-    if (!ctx.commentId) return;
+async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket' | 'confused') {
     try {
-        await ctx.octokit.reactions.createForIssueComment({
-            owner: ctx.owner,
-            repo: ctx.repo,
-            comment_id: ctx.commentId,
-            content: reaction,
-        });
-        console.log(`👀 Reacted with ${reaction}`);
+        if (ctx.commentId) {
+            await ctx.octokit.reactions.createForIssueComment({
+                owner: ctx.owner,
+                repo: ctx.repo,
+                comment_id: ctx.commentId,
+                content: reaction,
+            });
+            console.log(`👀 Reacted to comment with ${reaction}`);
+        } else {
+            // Fallback: React to the PR itself (Issue)
+            await ctx.octokit.reactions.createForIssue({
+                owner: ctx.owner,
+                repo: ctx.repo,
+                issue_number: ctx.prNumber,
+                content: reaction,
+            });
+            console.log(`👀 Reacted to PR with ${reaction}`);
+        }
     } catch (e) {
         console.log("⚠️ Could not react");
     }
@@ -584,6 +594,7 @@ async function main() {
 
     if (triage.files_to_audit.length === 0) {
         await postComment(ctx, formatTriageSkipComment(triage));
+        await addReaction(ctx, 'rocket');
         return;
     }
 
@@ -592,6 +603,11 @@ async function main() {
     console.log(`\n🔬 Review:`, JSON.stringify(review, null, 2), '\n');
 
     await postComment(ctx, formatReviewComment(review));
+
+    // Final Reaction based on Verdict
+    const finalReaction = review.summary.verdict === 'REQUEST_CHANGES' ? 'confused' : 'rocket';
+    await addReaction(ctx, finalReaction);
+
     console.log('\n🏁 J Star Review Complete!');
 }
 
