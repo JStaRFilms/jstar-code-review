@@ -5,10 +5,13 @@
 import { generateObject } from 'ai';
 import { createGroq } from '@ai-sdk/groq';
 import { Octokit } from '@octokit/rest';
-import * as fs from 'fs';
-import * as path from 'path';
-
-import { TRIAGE_SYSTEM_PROMPT, ANALYST_SYSTEM_PROMPT, buildAnalystUserPrompt, CHUNK_REVIEW_SYSTEM_PROMPT, buildChunkReviewPrompt } from './prompts.js';
+import {
+    TRIAGE_SYSTEM_PROMPT,
+    ANALYST_SYSTEM_PROMPT,
+    buildAnalystUserPrompt,
+    CHUNK_REVIEW_SYSTEM_PROMPT,
+    buildChunkReviewPrompt
+} from './prompts.js';
 import {
     TriageSchema,
     JStarReviewSchema,
@@ -28,6 +31,12 @@ const groq = createGroq({
 // Model configuration from env
 const TRIAGE_MODEL = process.env.TRIAGE_MODEL || 'openai/gpt-oss-120b';
 const ANALYST_MODEL = process.env.ANALYST_MODEL || 'moonshotai/kimi-k2-instruct-0905';
+
+// Tuning Configuration
+const AI_CONCURRENCY = parseInt(process.env.AI_CONCURRENCY || '1', 10);
+const AI_MAX_RETRIES = parseInt(process.env.AI_MAX_RETRIES || '3', 10);
+const AI_RETRY_DELAY = parseInt(process.env.AI_RETRY_DELAY || '2000', 10);
+const AI_BACKOFF_FACTOR = parseInt(process.env.AI_BACKOFF_FACTOR || '2', 10);
 
 // ============================================================
 // ENVIRONMENT & CONTEXT
@@ -178,7 +187,6 @@ async function fetchPRDiff(ctx: GitHubContext): Promise<string> {
     }
 
     // In some Octokit versions/configurations, diffs might return as objects if mediaType isn't respected
-    // but typically strict 'diff' format returns string.
     console.warn('⚠️ Unexpected diff format:', typeof data);
     return String(data || '');
 }
@@ -232,6 +240,37 @@ async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket' | 'co
 }
 
 // ============================================================
+// GLOBAL HELPERS
+// ============================================================
+
+/**
+ * Helper: Retry AI calls with exponential backoff on rate limits.
+ */
+async function callAIWithRetry<T>(operation: () => Promise<T>, retries = AI_MAX_RETRIES, delay = AI_RETRY_DELAY): Promise<T> {
+    try {
+        return await operation();
+    } catch (error: any) {
+        // Robust Error Detection (Prioritize status codes/codes over messages)
+        const code = error.code || '';
+        const status = error.statusCode || 0;
+
+        const isRateLimit =
+            status === 429 ||
+            code === 'rate_limit_exceeded' ||
+            code === 'insufficient_quota' ||
+            error.message?.toLowerCase().includes('rate limit') ||
+            error.message?.toLowerCase().includes('token');
+
+        if (retries > 0 && isRateLimit) {
+            console.log(`   🔸 Rate limit hit (${status || code}). Retrying in ${delay / 1000}s... (${retries} attempts left)`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return callAIWithRetry(operation, retries - 1, delay * AI_BACKOFF_FACTOR);
+        }
+        throw error;
+    }
+}
+
+// ============================================================
 // AI STAGES
 // ============================================================
 
@@ -255,7 +294,7 @@ async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: s
 
     // Estimate tokens (rough: 4 chars per token)
     const estimatedTokens = Math.ceil(diff.length / 4);
-    const TOKEN_LIMIT = 6000; // Reduced from 8000 to leave more headroom for 10k TPM
+    const TOKEN_LIMIT = 6000; // Safe buffer under 10K TPM
 
     if (estimatedTokens <= TOKEN_LIMIT) {
         // Small diff: use single-shot review (original behavior)
@@ -362,67 +401,6 @@ function splitDiffByFile(diff: string): FileDiff[] {
 }
 
 /**
- * Review large diffs by chunking per-file and aggregating.
- */
-async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
-    const fileDiffs = splitDiffByFile(diff);
-    console.log(`🔪 Split into ${fileDiffs.length} file chunks`);
-
-    // Filter to only audit files the triage identified as critical
-    const relevantDiffs = fileDiffs.filter(fd =>
-        filesToAudit.some(f => fd.filename.endsWith(f) || f.endsWith(fd.filename))
-    );
-
-    console.log(`🎯 Reviewing ${relevantDiffs.length} critical files`);
-
-    // Review each file chunk (Sequential to respect 10k TPM)
-    const BATCH_SIZE = 1;
-    const allChunkResults: ChunkReviewResult[] = [];
-
-    for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
-        const batch = relevantDiffs.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(
-            batch.map(fd => {
-                const fileInfo = allFiles.find(f => f.filename === fd.filename);
-                const status = fileInfo?.status || 'modified';
-                return reviewFileChunk(fd.filename, fd.diff, status, architectureContext, existingDocs);
-            })
-        );
-        allChunkResults.push(...batchResults);
-
-        if (i + BATCH_SIZE < relevantDiffs.length) {
-            console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files... taking a breath 🧘`);
-            await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay to cool down TPM
-        }
-    }
-
-    // Aggregate results
-    return aggregateChunkReviews(allChunkResults);
-}
-
-/**
- * Helper: Retry AI calls with exponential backoff on rate limits.
- */
-async function callAIWithRetry<T>(operation: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
-    try {
-        return await operation();
-    } catch (error: any) {
-        // Check for Groq/OpenAI rate limit errors (429, 'limit', 'token')
-        const isRateLimit = error.statusCode === 429 ||
-            error.message?.includes('rate limit') ||
-            error.message?.includes('token') ||
-            error.code === 'rate_limit_exceeded';
-
-        if (retries > 0 && isRateLimit) {
-            console.log(`   🔸 Rate limit hit. Retrying in ${delay / 1000}s... (${retries} attempts left)`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            return callAIWithRetry(operation, retries - 1, delay * 2);
-        }
-        throw error;
-    }
-}
-
-/**
  * Review a single file chunk.
  */
 async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[]): Promise<ChunkReviewResult> {
@@ -440,6 +418,45 @@ async function reviewFileChunk(filename: string, fileDiff: string, status: strin
         console.log(`⚠️ Failed to review ${filename} after retries, skipping. Error: ${(error as any).message}`);
         return { file: filename, findings: [], quality_score: 0 };
     }
+}
+
+/**
+ * Review large diffs by chunking per-file and aggregating.
+ */
+async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
+    const fileDiffs = splitDiffByFile(diff);
+    console.log(`🔪 Split into ${fileDiffs.length} file chunks`);
+
+    // Filter to only audit files the triage identified as critical
+    const relevantDiffs = fileDiffs.filter(fd =>
+        filesToAudit.some(f => fd.filename.endsWith(f) || f.endsWith(fd.filename))
+    );
+
+    console.log(`🎯 Reviewing ${relevantDiffs.length} critical files`);
+
+    // Review each file chunk (Sequential or Concurrent based on Config)
+    const BATCH_SIZE = AI_CONCURRENCY;
+    const allChunkResults: ChunkReviewResult[] = [];
+
+    for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
+        const batch = relevantDiffs.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+            batch.map(fd => {
+                const fileInfo = allFiles.find(f => f.filename === fd.filename);
+                const status = fileInfo?.status || 'modified';
+                return reviewFileChunk(fd.filename, fd.diff, status, architectureContext, existingDocs);
+            })
+        );
+        allChunkResults.push(...batchResults);
+
+        if (i + BATCH_SIZE < relevantDiffs.length) {
+            console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files... taking a breath 🧘`);
+            await new Promise(resolve => setTimeout(resolve, AI_RETRY_DELAY)); // Configurable delay
+        }
+    }
+
+    // Aggregate results
+    return aggregateChunkReviews(allChunkResults);
 }
 
 /**

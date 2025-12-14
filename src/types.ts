@@ -151,6 +151,11 @@ export const EnvSchema = z.object({
     GITHUB_REPOSITORY: z.string().min(1, 'GITHUB_REPOSITORY is required'),
     PR_NUMBER: z.string().regex(/^\d+$/, 'PR_NUMBER must be a valid number'),
     COMMENT_ID: z.string().optional(),
+    // AI Tuning (Optional)
+    AI_CONCURRENCY: z.string().optional().default('1'),
+    AI_MAX_RETRIES: z.string().optional().default('3'),
+    AI_RETRY_DELAY: z.string().optional().default('2000'),
+    AI_BACKOFF_FACTOR: z.string().optional().default('2'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
