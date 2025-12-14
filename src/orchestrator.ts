@@ -605,7 +605,7 @@ async function main() {
     await postComment(ctx, formatReviewComment(review));
 
     // Final Reaction based on Verdict
-    const finalReaction = review.summary.verdict === 'REQUEST_CHANGES' ? 'confused' : 'rocket';
+    const finalReaction = review?.summary?.verdict === 'REQUEST_CHANGES' ? 'confused' : 'rocket';
     await addReaction(ctx, finalReaction);
 
     console.log('\n🏁 J Star Review Complete!');

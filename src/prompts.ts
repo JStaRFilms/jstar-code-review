@@ -74,7 +74,7 @@ You MUST include both "summary" and "findings" fields.Do not omit the summary.
 JSON Structure:
 {
   "summary": { "quality_score": 0 - 100, "verdict": "APPROVE" | "REQUEST_CHANGES" | "COMMENT", "tone": "encouraging" | "critical" | "neutral" },
-  "findings": [{ "file": "...", "severity": "...", "category": "...", "title": "...", "message": "...", "fix_prompt": "..." }]
+  "findings": [{ "file": "...", "severity": "...", "category": "...", "title": "...", "message": "...", "fix_prompt": string | null }]
 }
 `;
 
