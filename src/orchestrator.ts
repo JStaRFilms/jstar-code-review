@@ -53,6 +53,11 @@ interface GitHubContext {
     octokit: Octokit;
 }
 
+interface PrFile {
+    filename: string;
+    status: 'added' | 'modified' | 'removed' | 'renamed' | 'changed' | 'copied' | 'unchanged';
+}
+
 function initGitHub(env: ReturnType<typeof validateEnv>): GitHubContext {
     const [owner, repo] = env.GITHUB_REPOSITORY.split('/');
     return {
@@ -165,17 +170,30 @@ async function fetchPRDiff(ctx: GitHubContext): Promise<string> {
         pull_number: ctx.prNumber,
         mediaType: { format: 'diff' },
     });
-    return response.data as unknown as string;
+
+    // Runtime check directly without casting immediately
+    const data = response.data;
+    if (typeof data === 'string') {
+        return data;
+    }
+
+    // In some Octokit versions/configurations, diffs might return as objects if mediaType isn't respected
+    // but typically strict 'diff' format returns string.
+    console.warn('⚠️ Unexpected diff format:', typeof data);
+    return String(data || '');
 }
 
-async function fetchPRFiles(ctx: GitHubContext): Promise<string[]> {
+async function fetchPRFiles(ctx: GitHubContext): Promise<PrFile[]> {
     const response = await ctx.octokit.pulls.listFiles({
         owner: ctx.owner,
         repo: ctx.repo,
         pull_number: ctx.prNumber,
         per_page: 100,
     });
-    return response.data.map((file) => file.filename);
+    return response.data.map((file) => ({
+        filename: file.filename,
+        status: file.status as PrFile['status']
+    }));
 }
 
 async function postComment(ctx: GitHubContext, body: string): Promise<void> {
@@ -188,18 +206,28 @@ async function postComment(ctx: GitHubContext, body: string): Promise<void> {
     console.log('💬 Comment posted to PR.');
 }
 
-async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket') {
-    if (!ctx.commentId) return;
+async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket' | 'confused') {
     try {
-        await ctx.octokit.reactions.createForIssueComment({
-            owner: ctx.owner,
-            repo: ctx.repo,
-            comment_id: ctx.commentId,
-            content: reaction,
-        });
-        console.log(`👀 Reacted with ${reaction}`);
+        if (ctx.commentId) {
+            await ctx.octokit.reactions.createForIssueComment({
+                owner: ctx.owner,
+                repo: ctx.repo,
+                comment_id: ctx.commentId,
+                content: reaction,
+            });
+            console.log(`👀 Reacted to comment with ${reaction}`);
+        } else {
+            // Fallback: React to the PR itself (Issue)
+            await ctx.octokit.reactions.createForIssue({
+                owner: ctx.owner,
+                repo: ctx.repo,
+                issue_number: ctx.prNumber,
+                content: reaction,
+            });
+            console.log(`👀 Reacted to PR with ${reaction}`);
+        }
     } catch (e) {
-        console.log("⚠️ Could not react");
+        console.error("⚠️ Could not react:", e);
     }
 }
 
@@ -207,20 +235,22 @@ async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket') {
 // AI STAGES
 // ============================================================
 
-async function runTriage(files: string[], diffLength: number): Promise<TriageResult> {
+async function runTriage(files: PrFile[], diffLength: number): Promise<TriageResult> {
     console.log(`🔍 Running Triage with ${TRIAGE_MODEL}...`);
+
+    const fileList = files.map(f => `${f.filename} [${f.status}]`).join('\n');
 
     const { object } = await generateObject({
         model: groq(TRIAGE_MODEL),
         schema: TriageSchema,
         system: TRIAGE_SYSTEM_PROMPT,
-        prompt: `PR contains ${files.length} files. Diff length: ${diffLength} chars.\n\nFiles:\n${files.join('\n')}`,
+        prompt: `PR contains ${files.length} files. Diff length: ${diffLength} chars.\n\nFiles:\n${fileList}`,
     });
 
     return object;
 }
 
-async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
+async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
     console.log(`🧠 Running Deep Review with ${ANALYST_MODEL}...`);
 
     // Estimate tokens (rough: 4 chars per token)
@@ -235,7 +265,7 @@ async function runDeepReview(filesToAudit: string[], allFiles: string[], diff: s
 
     // Large diff: use chunked map-reduce
     console.log(`📦 Diff too large (${estimatedTokens} est. tokens), using chunked review`);
-    const rawResult = await runChunkedReview(filesToAudit, diff, architectureContext, existingDocs);
+    const rawResult = await runChunkedReview(filesToAudit, allFiles, diff, architectureContext, existingDocs);
     return adjustScoreForSkippedFiles(rawResult, filesToAudit.length, allFiles.length);
 }
 
@@ -275,16 +305,18 @@ function adjustScoreForSkippedFiles(result: JStarReviewResult, auditedCount: num
 /**
  * Original single-shot review for small diffs.
  */
-async function runSingleShotReview(filesToAudit: string[], allFiles: string[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
+async function runSingleShotReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
     const enhancedSystemPrompt = architectureContext
         ? `${ANALYST_SYSTEM_PROMPT}\n\n--- PROJECT CONTEXT ---\n${architectureContext}`
         : ANALYST_SYSTEM_PROMPT;
+
+    const formattedFiles = allFiles.map(f => `${f.filename} [${f.status}]`);
 
     const { object } = await generateObject({
         model: groq(ANALYST_MODEL),
         schema: JStarReviewSchema,
         system: enhancedSystemPrompt,
-        prompt: buildAnalystUserPrompt(filesToAudit, allFiles, diff, existingDocs),
+        prompt: buildAnalystUserPrompt(filesToAudit, formattedFiles, diff, existingDocs),
     });
 
     return object;
@@ -330,7 +362,7 @@ function splitDiffByFile(diff: string): FileDiff[] {
 /**
  * Review large diffs by chunking per-file and aggregating.
  */
-async function runChunkedReview(filesToAudit: string[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
+async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
     const fileDiffs = splitDiffByFile(diff);
     console.log(`🔪 Split into ${fileDiffs.length} file chunks`);
 
@@ -348,7 +380,11 @@ async function runChunkedReview(filesToAudit: string[], diff: string, architectu
     for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
         const batch = relevantDiffs.slice(i, i + BATCH_SIZE);
         const batchResults = await Promise.all(
-            batch.map(fd => reviewFileChunk(fd.filename, fd.diff, architectureContext, existingDocs))
+            batch.map(fd => {
+                const fileInfo = allFiles.find(f => f.filename === fd.filename);
+                const status = fileInfo?.status || 'modified';
+                return reviewFileChunk(fd.filename, fd.diff, status, architectureContext, existingDocs);
+            })
         );
         allChunkResults.push(...batchResults);
 
@@ -364,13 +400,13 @@ async function runChunkedReview(filesToAudit: string[], diff: string, architectu
 /**
  * Review a single file chunk.
  */
-async function reviewFileChunk(filename: string, fileDiff: string, architectureContext: string, existingDocs: string[]): Promise<ChunkReviewResult> {
+async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[]): Promise<ChunkReviewResult> {
     try {
         const { object } = await generateObject({
             model: groq(ANALYST_MODEL),
             schema: ChunkReviewSchema,
             system: CHUNK_REVIEW_SYSTEM_PROMPT,
-            prompt: buildChunkReviewPrompt(filename, fileDiff, architectureContext, existingDocs),
+            prompt: buildChunkReviewPrompt(filename, fileDiff, status, architectureContext, existingDocs),
         });
         return object;
     } catch (error) {
@@ -568,6 +604,7 @@ async function main() {
 
     if (triage.files_to_audit.length === 0) {
         await postComment(ctx, formatTriageSkipComment(triage));
+        await addReaction(ctx, 'rocket');
         return;
     }
 
@@ -576,6 +613,11 @@ async function main() {
     console.log(`\n🔬 Review:`, JSON.stringify(review, null, 2), '\n');
 
     await postComment(ctx, formatReviewComment(review));
+
+    // Final Reaction based on Verdict
+    const finalReaction = review?.summary?.verdict === 'REQUEST_CHANGES' ? 'confused' : 'rocket';
+    await addReaction(ctx, finalReaction);
+
     console.log('\n🏁 J Star Review Complete!');
 }
 
