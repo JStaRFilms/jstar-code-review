@@ -369,7 +369,9 @@ interface FileDiff {
 
 function splitDiffByFile(diff: string): FileDiff[] {
     const fileDiffs: FileDiff[] = [];
-    const diffPattern = /^diff --git a\/(.+?) b\/\1/gm;
+    // Relaxed Regex: Capture the 'b/' path as the filename. Do NOT enforce \1 backreference.
+    // This allows renames and prevents "Mega Chunks" when the header format varies.
+    const diffPattern = /^diff --git a\/.+? b\/(.+)/gm;
 
     let match;
     const positions: { filename: string; start: number }[] = [];
@@ -428,12 +430,20 @@ async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff
 
 async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<ChunkReviewResult> {
     try {
+        // SAFETY: Truncate massive files to prevent token limit crashes (413 Payload Too Large)
+        const MAX_CHUNK_SIZE = 30000; // ~7.5k tokens
+        let safeDiff = fileDiff;
+        if (safeDiff.length > MAX_CHUNK_SIZE) {
+            console.log(`✂️ Truncating oversized chunk for ${filename} (${safeDiff.length} chars)`);
+            safeDiff = safeDiff.substring(0, MAX_CHUNK_SIZE) + '\n\n... [Truncated for safety]';
+        }
+
         return await callAIWithRetry(async () => {
             const { object } = await generateObject({
                 model: groq(ANALYST_MODEL),
                 schema: ChunkReviewSchema,
                 system: CHUNK_REVIEW_SYSTEM_PROMPT,
-                prompt: buildChunkReviewPrompt(filename, fileDiff, status, architectureContext, existingDocs),
+                prompt: buildChunkReviewPrompt(filename, safeDiff, status, architectureContext, existingDocs),
             });
             return object;
         }, config);
