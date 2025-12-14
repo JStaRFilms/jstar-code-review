@@ -35,7 +35,7 @@ const MOCK_FILES = [
     'src/components/Button.tsx',
     'styles/globals.css',
     'README.md',
-    'src/deprecated.ts [removed]',
+    'src/deprecated.ts [removed]', // Explicitly marked for test scenario
 ];
 
 // Simulated existing docs (to test false positive fix)

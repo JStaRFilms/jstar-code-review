@@ -170,7 +170,17 @@ async function fetchPRDiff(ctx: GitHubContext): Promise<string> {
         pull_number: ctx.prNumber,
         mediaType: { format: 'diff' },
     });
-    return response.data as unknown as string;
+
+    // Runtime check directly without casting immediately
+    const data = response.data;
+    if (typeof data === 'string') {
+        return data;
+    }
+
+    // In some Octokit versions/configurations, diffs might return as objects if mediaType isn't respected
+    // but typically strict 'diff' format returns string.
+    console.warn('⚠️ Unexpected diff format:', typeof data);
+    return String(data || '');
 }
 
 async function fetchPRFiles(ctx: GitHubContext): Promise<PrFile[]> {
@@ -217,7 +227,7 @@ async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket' | 'co
             console.log(`👀 Reacted to PR with ${reaction}`);
         }
     } catch (e) {
-        console.log("⚠️ Could not react");
+        console.error("⚠️ Could not react:", e);
     }
 }
 
