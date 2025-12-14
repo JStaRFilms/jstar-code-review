@@ -58,10 +58,10 @@ function validateEnv() {
 
 function parseAIConfig(env: Env): AIConfig {
     return {
-        concurrency: parseInt(env.AI_CONCURRENCY || '1', 10),
-        maxRetries: parseInt(env.AI_MAX_RETRIES || '3', 10),
-        retryDelay: parseInt(env.AI_RETRY_DELAY || '2000', 10),
-        backoffFactor: parseInt(env.AI_BACKOFF_FACTOR || '2', 10),
+        concurrency: env.AI_CONCURRENCY, // Zod already coerced to number
+        maxRetries: env.AI_MAX_RETRIES,
+        retryDelay: env.AI_RETRY_DELAY,
+        backoffFactor: env.AI_BACKOFF_FACTOR,
     };
 }
 

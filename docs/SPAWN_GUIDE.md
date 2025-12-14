@@ -128,9 +128,10 @@ review:
 
 If you are hitting rate limits (429 errors), you can tune the concurrency via **Secrets** or **Variables**:
 
-- `AI_CONCURRENCY`: Set to `1` (default) for safety, or `3-5` for speed.
-- `AI_MAX_RETRIES`: Default `3`.
-- `AI_RETRY_DELAY`: Default `2000` (ms).
+- `AI_CONCURRENCY`: Positive integer. Set to `1` (default) for safety, or `3-5` for speed.
+- `AI_MAX_RETRIES`: Non-negative integer. Default `3`.
+- `AI_RETRY_DELAY`: Non-negative integer (ms). Default `2000`.
+- `AI_BACKOFF_FACTOR`: Number >= 1. Default `2`.
 
 ---
 
