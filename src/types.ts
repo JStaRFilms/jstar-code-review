@@ -113,6 +113,7 @@ export const JStarReviewSchema = z.object({
     summary: SummarySchema.describe('High-level summary of the review.'),
     findings: z
         .array(FindingSchema)
+        .default([])
         .describe('List of all issues found. Can be empty if code is clean.'),
 });
 
@@ -130,6 +131,7 @@ export const ChunkReviewSchema = z.object({
     file: z.string().describe('The file being reviewed'),
     findings: z
         .array(FindingSchema)
+        .default([])
         .describe('Issues found in this specific file. Can be empty if clean.'),
     quality_score: z
         .number()
