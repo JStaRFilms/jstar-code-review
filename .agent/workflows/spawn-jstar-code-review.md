@@ -21,7 +21,7 @@ mkdir -p .github/workflows
 ### 2. Download the Spawn Template
 // turbo
 ```bash
-curl -o .github/workflows/jstar-review.yml https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/main/.github/workflows/spawn-template.yml
+curl -o .github/workflows/jstar-review.yml https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/main/.github/spawn-template.yml
 ```
 
 ### 3. (Optional) Create J Star Config Directory
