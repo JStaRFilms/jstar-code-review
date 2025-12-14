@@ -5,10 +5,13 @@
 import { generateObject } from 'ai';
 import { createGroq } from '@ai-sdk/groq';
 import { Octokit } from '@octokit/rest';
-import * as fs from 'fs';
-import * as path from 'path';
-
-import { TRIAGE_SYSTEM_PROMPT, ANALYST_SYSTEM_PROMPT, buildAnalystUserPrompt, CHUNK_REVIEW_SYSTEM_PROMPT, buildChunkReviewPrompt } from './prompts.js';
+import {
+    TRIAGE_SYSTEM_PROMPT,
+    ANALYST_SYSTEM_PROMPT,
+    buildAnalystUserPrompt,
+    CHUNK_REVIEW_SYSTEM_PROMPT,
+    buildChunkReviewPrompt
+} from './prompts.js';
 import {
     TriageSchema,
     JStarReviewSchema,
@@ -18,6 +21,7 @@ import {
     type JStarReviewResult,
     type ChunkReviewResult,
     type Finding,
+    type Env,
 } from './types.js';
 
 // Initialize Groq provider
@@ -30,8 +34,15 @@ const TRIAGE_MODEL = process.env.TRIAGE_MODEL || 'openai/gpt-oss-120b';
 const ANALYST_MODEL = process.env.ANALYST_MODEL || 'moonshotai/kimi-k2-instruct-0905';
 
 // ============================================================
-// ENVIRONMENT & CONTEXT
+// ENVIRONMENT & CONFIG
 // ============================================================
+
+interface AIConfig {
+    concurrency: number;
+    maxRetries: number;
+    retryDelay: number;
+    backoffFactor: number;
+}
 
 function validateEnv() {
     const result = EnvSchema.safeParse(process.env);
@@ -45,12 +56,22 @@ function validateEnv() {
     return result.data;
 }
 
+function parseAIConfig(env: Env): AIConfig {
+    return {
+        concurrency: env.AI_CONCURRENCY, // Zod already coerced to number
+        maxRetries: env.AI_MAX_RETRIES,
+        retryDelay: env.AI_RETRY_DELAY,
+        backoffFactor: env.AI_BACKOFF_FACTOR,
+    };
+}
+
 interface GitHubContext {
     owner: string;
     repo: string;
     prNumber: number;
     commentId?: number;
     octokit: Octokit;
+    config: AIConfig; // Pass AI config through context
 }
 
 interface PrFile {
@@ -58,7 +79,7 @@ interface PrFile {
     status: 'added' | 'modified' | 'removed' | 'renamed' | 'changed' | 'copied' | 'unchanged';
 }
 
-function initGitHub(env: ReturnType<typeof validateEnv>): GitHubContext {
+function initGitHub(env: Env, config: AIConfig): GitHubContext {
     const [owner, repo] = env.GITHUB_REPOSITORY.split('/');
     return {
         owner,
@@ -66,6 +87,7 @@ function initGitHub(env: ReturnType<typeof validateEnv>): GitHubContext {
         prNumber: parseInt(env.PR_NUMBER, 10),
         commentId: env.COMMENT_ID ? parseInt(env.COMMENT_ID, 10) : undefined,
         octokit: new Octokit({ auth: env.GITHUB_TOKEN }),
+        config,
     };
 }
 
@@ -73,10 +95,6 @@ function initGitHub(env: ReturnType<typeof validateEnv>): GitHubContext {
 // REMOTE CONTEXT LOADING (GitHub API)
 // ============================================================
 
-/**
- * Helper to fetch a single file content from the remote repo.
- * Returns null if not found.
- */
 async function fetchRemoteFile(ctx: GitHubContext, path: string): Promise<string | null> {
     try {
         const { data } = await ctx.octokit.repos.getContent({
@@ -86,7 +104,7 @@ async function fetchRemoteFile(ctx: GitHubContext, path: string): Promise<string
         });
 
         if (Array.isArray(data) || !('content' in data)) {
-            return null; // It's a directory or submodule
+            return null;
         }
 
         return Buffer.from(data.content, 'base64').toString('utf-8');
@@ -94,7 +112,7 @@ async function fetchRemoteFile(ctx: GitHubContext, path: string): Promise<string
         if (e.status !== 404) {
             console.log(`⚠️ Error fetching ${path}: ${e.message}`);
         }
-        return null; // Not found
+        return null;
     }
 }
 
@@ -115,18 +133,12 @@ async function loadArchitectureContext(ctx: GitHubContext): Promise<string> {
     return contextDocs;
 }
 
-/**
- * Scan the docs/features folder on remote.
- * Returns a map of feature names to their doc files.
- */
 async function loadDocsInventory(ctx: GitHubContext): Promise<Map<string, string>> {
     const inventory = new Map<string, string>();
     const targetDirs = ['docs/features'];
 
     for (const docsDir of targetDirs) {
-        // Remove leading/trailing slashes for cleanliness
         const cleanPath = docsDir.replace(/^\/+|\/+$/g, '');
-
         try {
             const { data } = await ctx.octokit.repos.getContent({
                 owner: ctx.owner,
@@ -137,7 +149,6 @@ async function loadDocsInventory(ctx: GitHubContext): Promise<Map<string, string
             if (Array.isArray(data)) {
                 for (const file of data) {
                     if (file.name.endsWith('.md') && file.type === 'file') {
-                        // Extract feature name (e.g., "themes.md" -> "themes")
                         const featureName = file.name.replace('.md', '');
                         inventory.set(featureName, file.path);
                     }
@@ -171,14 +182,11 @@ async function fetchPRDiff(ctx: GitHubContext): Promise<string> {
         mediaType: { format: 'diff' },
     });
 
-    // Runtime check directly without casting immediately
     const data = response.data;
     if (typeof data === 'string') {
         return data;
     }
 
-    // In some Octokit versions/configurations, diffs might return as objects if mediaType isn't respected
-    // but typically strict 'diff' format returns string.
     console.warn('⚠️ Unexpected diff format:', typeof data);
     return String(data || '');
 }
@@ -217,7 +225,6 @@ async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket' | 'co
             });
             console.log(`👀 Reacted to comment with ${reaction}`);
         } else {
-            // Fallback: React to the PR itself (Issue)
             await ctx.octokit.reactions.createForIssue({
                 owner: ctx.owner,
                 repo: ctx.repo,
@@ -228,6 +235,40 @@ async function addReaction(ctx: GitHubContext, reaction: 'eyes' | 'rocket' | 'co
         }
     } catch (e) {
         console.error("⚠️ Could not react:", e);
+    }
+}
+
+// ============================================================
+// GLOBAL HELPERS
+// ============================================================
+
+/**
+ * Helper: Retry AI calls with exponential backoff on rate limits.
+ */
+async function callAIWithRetry<T>(operation: () => Promise<T>, config: AIConfig, retriesOverride?: number, delayOverride?: number): Promise<T> {
+    const retries = retriesOverride ?? config.maxRetries;
+    const delay = delayOverride ?? config.retryDelay;
+
+    try {
+        return await operation();
+    } catch (error: any) {
+        const code = error.code || '';
+        const status = error.statusCode || 0;
+
+        const isRateLimit =
+            status === 429 ||
+            code === 'rate_limit_exceeded' ||
+            code === 'insufficient_quota' ||
+            error.message?.toLowerCase().includes('rate limit') ||
+            error.message?.toLowerCase().includes('token');
+
+        if (retries > 0 && isRateLimit) {
+            console.log(`   🔸 Rate limit hit (${status || code}). Retrying in ${delay / 1000}s... (${retries} attempts left)`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            // RECURSIVE AWAIT FIX (Audit Item 1)
+            return await callAIWithRetry(operation, config, retries - 1, delay * config.backoffFactor);
+        }
+        throw error;
     }
 }
 
@@ -250,33 +291,30 @@ async function runTriage(files: PrFile[], diffLength: number): Promise<TriageRes
     return object;
 }
 
-async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
+async function runDeepReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<JStarReviewResult> {
     console.log(`🧠 Running Deep Review with ${ANALYST_MODEL}...`);
 
     // Estimate tokens (rough: 4 chars per token)
     const estimatedTokens = Math.ceil(diff.length / 4);
-    const TOKEN_LIMIT = 8000; // Safe buffer under 10K TPM
+
+    // TOKEN LIMIT RATIONALE (Audit Item 2)
+    // We reduce this to 6000 to leave a safe buffer for 120b or Kimi models which often have
+    // 8k-10k TPM limits on lower tiers.
+    const TOKEN_LIMIT = 6000;
 
     if (estimatedTokens <= TOKEN_LIMIT) {
-        // Small diff: use single-shot review (original behavior)
-        const rawResult = await runSingleShotReview(filesToAudit, allFiles, diff, architectureContext, existingDocs);
+        const rawResult = await runSingleShotReview(filesToAudit, allFiles, diff, architectureContext, existingDocs, config);
         return adjustScoreForSkippedFiles(rawResult, filesToAudit.length, allFiles.length);
     }
 
-    // Large diff: use chunked map-reduce
     console.log(`📦 Diff too large (${estimatedTokens} est. tokens), using chunked review`);
-    const rawResult = await runChunkedReview(filesToAudit, allFiles, diff, architectureContext, existingDocs);
+    const rawResult = await runChunkedReview(filesToAudit, allFiles, diff, architectureContext, existingDocs, config);
     return adjustScoreForSkippedFiles(rawResult, filesToAudit.length, allFiles.length);
 }
 
-/**
- * Adjusts the score to account for files that were skipped by Triage (assumed safe/100).
- * Rule: Final Score = ((RawScore * AuditedCount) + (100 * SkippedCount)) / TotalCount
- */
 function adjustScoreForSkippedFiles(result: JStarReviewResult, auditedCount: number, totalCount: number): JStarReviewResult {
     if (totalCount === 0) return result;
 
-    // Cap auditedCount at totalCount to prevent negative skipped (e.g. if filesToAudit includes deleted files)
     const effectiveAudited = Math.min(auditedCount, totalCount);
     const skippedCount = totalCount - effectiveAudited;
 
@@ -288,10 +326,9 @@ function adjustScoreForSkippedFiles(result: JStarReviewResult, auditedCount: num
     );
 
     console.log(`⚖️  Weighted Score Adjustment:`);
-    console.log(`    - Raw Score (Audited Files): ${currentScore}`);
-    console.log(`    - Audited Files: ${effectiveAudited}`);
-    console.log(`    - Skipped Files (Assumed 100): ${skippedCount}`);
-    console.log(`    - New Weighted Score: ${weightedScore}`);
+    console.log(`    - Raw Score: ${currentScore}, Audited: ${effectiveAudited}`);
+    console.log(`    - Skipped (100): ${skippedCount}`);
+    console.log(`    - New Score: ${weightedScore}`);
 
     return {
         ...result,
@@ -302,22 +339,21 @@ function adjustScoreForSkippedFiles(result: JStarReviewResult, auditedCount: num
     };
 }
 
-/**
- * Original single-shot review for small diffs.
- */
-async function runSingleShotReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
+async function runSingleShotReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<JStarReviewResult> {
     const enhancedSystemPrompt = architectureContext
         ? `${ANALYST_SYSTEM_PROMPT}\n\n--- PROJECT CONTEXT ---\n${architectureContext}`
         : ANALYST_SYSTEM_PROMPT;
 
     const formattedFiles = allFiles.map(f => `${f.filename} [${f.status}]`);
 
-    const { object } = await generateObject({
-        model: groq(ANALYST_MODEL),
-        schema: JStarReviewSchema,
-        system: enhancedSystemPrompt,
-        prompt: buildAnalystUserPrompt(filesToAudit, formattedFiles, diff, existingDocs),
-    });
+    const { object } = await callAIWithRetry(async () => {
+        return await generateObject({
+            model: groq(ANALYST_MODEL),
+            schema: JStarReviewSchema,
+            system: enhancedSystemPrompt,
+            prompt: buildAnalystUserPrompt(filesToAudit, formattedFiles, diff, existingDocs),
+        });
+    }, config);
 
     return object;
 }
@@ -331,12 +367,8 @@ interface FileDiff {
     diff: string;
 }
 
-/**
- * Parse unified diff into per-file chunks.
- */
 function splitDiffByFile(diff: string): FileDiff[] {
     const fileDiffs: FileDiff[] = [];
-    // Match diff headers: "diff --git a/path b/path" or "--- a/path"
     const diffPattern = /^diff --git a\/(.+?) b\/\1/gm;
 
     let match;
@@ -346,7 +378,6 @@ function splitDiffByFile(diff: string): FileDiff[] {
         positions.push({ filename: match[1], start: match.index });
     }
 
-    // Extract each file's diff
     for (let i = 0; i < positions.length; i++) {
         const start = positions[i].start;
         const end = i + 1 < positions.length ? positions[i + 1].start : diff.length;
@@ -359,22 +390,17 @@ function splitDiffByFile(diff: string): FileDiff[] {
     return fileDiffs;
 }
 
-/**
- * Review large diffs by chunking per-file and aggregating.
- */
-async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[]): Promise<JStarReviewResult> {
+async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<JStarReviewResult> {
     const fileDiffs = splitDiffByFile(diff);
     console.log(`🔪 Split into ${fileDiffs.length} file chunks`);
 
-    // Filter to only audit files the triage identified as critical
     const relevantDiffs = fileDiffs.filter(fd =>
         filesToAudit.some(f => fd.filename.endsWith(f) || f.endsWith(fd.filename))
     );
 
     console.log(`🎯 Reviewing ${relevantDiffs.length} critical files`);
 
-    // Review each file chunk (parallel in batches of 3 to not exceed RPM)
-    const BATCH_SIZE = 3;
+    const BATCH_SIZE = config.concurrency;
     const allChunkResults: ChunkReviewResult[] = [];
 
     for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
@@ -383,41 +409,40 @@ async function runChunkedReview(filesToAudit: string[], allFiles: PrFile[], diff
             batch.map(fd => {
                 const fileInfo = allFiles.find(f => f.filename === fd.filename);
                 const status = fileInfo?.status || 'modified';
-                return reviewFileChunk(fd.filename, fd.diff, status, architectureContext, existingDocs);
+                return reviewFileChunk(fd.filename, fd.diff, status, architectureContext, existingDocs, config);
             })
         );
         allChunkResults.push(...batchResults);
 
-        if (i + BATCH_SIZE < relevantDiffs.length) {
-            console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files...`);
+        // DELAY OPTIMIZATION (Audit Item 3)
+        // Only delay if we have more files to process AND we are running in strict sequential mode (low tier).
+        // High concurrency tiers (3+) likely don't need this artificial delay as much, or the throughput matters more.
+        if (i + BATCH_SIZE < relevantDiffs.length && config.concurrency === 1) {
+            console.log(`   ⏳ Reviewed ${i + BATCH_SIZE}/${relevantDiffs.length} files... taking a breath 🧘`);
+            await new Promise(resolve => setTimeout(resolve, config.retryDelay));
         }
     }
 
-    // Aggregate results
     return aggregateChunkReviews(allChunkResults);
 }
 
-/**
- * Review a single file chunk.
- */
-async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[]): Promise<ChunkReviewResult> {
+async function reviewFileChunk(filename: string, fileDiff: string, status: string, architectureContext: string, existingDocs: string[], config: AIConfig): Promise<ChunkReviewResult> {
     try {
-        const { object } = await generateObject({
-            model: groq(ANALYST_MODEL),
-            schema: ChunkReviewSchema,
-            system: CHUNK_REVIEW_SYSTEM_PROMPT,
-            prompt: buildChunkReviewPrompt(filename, fileDiff, status, architectureContext, existingDocs),
-        });
-        return object;
+        return await callAIWithRetry(async () => {
+            const { object } = await generateObject({
+                model: groq(ANALYST_MODEL),
+                schema: ChunkReviewSchema,
+                system: CHUNK_REVIEW_SYSTEM_PROMPT,
+                prompt: buildChunkReviewPrompt(filename, fileDiff, status, architectureContext, existingDocs),
+            });
+            return object;
+        }, config);
     } catch (error) {
-        console.log(`⚠️ Failed to review ${filename}, skipping`);
+        console.log(`⚠️ Failed to review ${filename} after retries, skipping. Error: ${(error as any).message}`);
         return { file: filename, findings: [], quality_score: 0 };
     }
 }
 
-/**
- * Combine chunk reviews into final JStarReviewResult.
- */
 function aggregateChunkReviews(chunks: ChunkReviewResult[]): JStarReviewResult {
     const allFindings: Finding[] = [];
     let totalQuality = 0;
@@ -429,7 +454,6 @@ function aggregateChunkReviews(chunks: ChunkReviewResult[]): JStarReviewResult {
 
     const avgQuality = chunks.length > 0 ? Math.round(totalQuality / chunks.length) : 0;
 
-    // Determine verdict based on findings
     const hasCritical = allFindings.some(f => f.severity === 'CRITICAL');
     const hasHigh = allFindings.some(f => f.severity === 'HIGH');
 
@@ -458,121 +482,84 @@ function aggregateChunkReviews(chunks: ChunkReviewResult[]): JStarReviewResult {
 }
 
 // ============================================================
-// FORMATTING
+// FORMATTING (Skipped detailed changes, kept as is)
 // ============================================================
 
 function formatTriageSkipComment(triage: TriageResult): string {
-    return `## ✨ J Star Triage
-
-**Risk Level:** ${triage.risk_level}
-
-${triage.ignore_reason ? `> ${triage.ignore_reason}` : ''}
-
-No critical files detected. Skipping deep review. 🎉`;
+    return `## ✨ J Star Triage\n\n**Risk Level:** ${triage.risk_level}\n\n${triage.ignore_reason ? `> ${triage.ignore_reason}` : ''}\n\nNo critical files detected. Skipping deep review. 🎉`;
 }
 
 function formatReviewComment(review: JStarReviewResult): string {
     const score = review.summary.quality_score;
     const verdict = review.summary.verdict;
 
-    // 1. Calculate Metrics
     const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, NITPICK: 0 };
-    for (const f of review.findings) {
-        counts[f.severity]++;
-    }
+    for (const f of review.findings) counts[f.severity]++;
     const totalFindings = review.findings.length;
 
-    // 2. Determine Mode
-    // High-Density Mode if >= 30 findings (Bumped from 15 to show Grouped Fixes more often)
+    // High-Density Mode if >= 30 findings
     const isHighDensity = totalFindings >= 30;
 
-    // 3. Header (Score + Summary Table)
     const icon = score > 80 ? '🟢' : score > 50 ? '🟡' : '🔴';
     let md = `# ${icon} J Star Code Audit\n\n`;
 
-    // Simple metrics table (Canonical Rule 2)
     md += `| Score | Verdict | 🚨 Critical | 🔶 High | 🔹 Medium | 🔧 Nitpick |\n`;
     md += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
     md += `| **${score}/100** | **${verdict}** | ${counts.CRITICAL || '-'} | ${counts.HIGH || '-'} | ${counts.MEDIUM || '-'} | ${counts.NITPICK || '-'} |\n\n`;
 
     if (totalFindings === 0) {
-        md += `### ✨ No issues found. Ship it!\n\n---\n\n`;
-        md += `Powered by J Star Sentinel ⚡`;
+        md += `### ✨ No issues found. Ship it!\n\n---\n\nPowered by J Star Sentinel ⚡`;
         return md;
     }
 
-    // Group findings by file
     const byFile = new Map<string, Finding[]>();
     for (const f of review.findings) {
         if (!byFile.has(f.file)) byFile.set(f.file, []);
         byFile.get(f.file)!.push(f);
     }
 
-    // Icons mapping
     const sevIcons: Record<string, string> = { CRITICAL: '🚨', HIGH: '🔶', MEDIUM: '🔹', NITPICK: '🔧' };
 
-    // 4. Render Body based on Mode
     if (isHighDensity) {
         md += `**SUMMARY MODE** (High finding count detected)\n\n`;
-
         for (const [file, findings] of byFile) {
             md += `### 📄 ${file}\n\n`;
             md += `| Sev | Cat | Issue | Fix |\n`;
             md += `| :--- | :--- | :--- | :--- |\n`;
-
             for (const f of findings) {
-                const title = f.title || f.message.substring(0, 50); // Fallback if title missing during migration
+                const title = f.title || f.message.substring(0, 50);
                 const desc = f.message;
                 const fix = f.fix_prompt ? `\`${f.fix_prompt.substring(0, 50)}${f.fix_prompt.length > 50 ? '...' : ''}\`` : 'See comments';
                 md += `| ${sevIcons[f.severity]} | ${f.category} | **${title}**<br>${desc} | ${fix} |\n`;
             }
             md += `\n`;
         }
-
     } else {
-
-        // Default Mode (Standard PR Review)
         for (const [file, findings] of byFile) {
             md += `## 📄 ${file}\n\n`;
-
             const fixes: string[] = [];
-
             for (const f of findings) {
                 const title = f.title || 'Untitled Issue';
                 const isAlertAndCritical = f.severity === 'CRITICAL';
                 const isAlertAndHigh = f.severity === 'HIGH';
 
-                if (f.fix_prompt) {
-                    fixes.push(`**${title}**: ${f.fix_prompt}`);
-                }
+                if (f.fix_prompt) fixes.push(`**${title}**: ${f.fix_prompt}`);
 
-                // Rule 3: GitHub Alerts for CRITICAL/HIGH
                 if (isAlertAndCritical || isAlertAndHigh) {
                     const alertType = isAlertAndCritical ? 'CAUTION' : 'WARNING';
-
-                    md += `> [!${alertType}]\n`;
-                    md += `> **${title}**\n`;
-                    md += `> ${f.message}\n`;
-                    md += `\n`; // End blockquote
+                    md += `> [!${alertType}]\n> **${title}**\n> ${f.message}\n\n`;
                 } else {
-                    // Standard Rendering for Medium/Nitpick
-                    md += `### ${sevIcons[f.severity]} ${title}\n`;
-                    md += `**Category:** ${f.category}\n\n`;
-                    md += `${f.message}\n\n`;
+                    md += `### ${sevIcons[f.severity]} ${title}\n**Category:** ${f.category}\n\n${f.message}\n\n`;
                 }
             }
-
             if (fixes.length > 0) {
                 md += `**🛠️ Recommended Fixes**\n\n`;
-                for (const fix of fixes) {
-                    md += `- ${fix}\n`;
-                }
+                for (const fix of fixes) md += `- ${fix}\n`;
             }
             md += `\n---\n\n`;
         }
     }
 
-    // 5. Footer (Canonical Rule 7)
     md += `Powered by J Star Sentinel ⚡`;
     return md;
 }
@@ -586,7 +573,8 @@ async function main() {
     console.log('================================\n');
 
     const env = validateEnv();
-    const ctx = initGitHub(env);
+    const config = parseAIConfig(env);
+    const ctx = initGitHub(env, config);
 
     await addReaction(ctx, 'eyes');
 
@@ -594,7 +582,7 @@ async function main() {
 
     const architectureContext = await loadArchitectureContext(ctx);
     const docsInventory = await loadDocsInventory(ctx);
-    const existingDocs = [...docsInventory.values()]; // Convert Map to array of doc paths
+    const existingDocs = [...docsInventory.values()];
 
     const [diff, files] = await Promise.all([fetchPRDiff(ctx), fetchPRFiles(ctx)]);
     console.log(`📄 Found ${files.length} files (${diff.length} chars diff)\n`);
@@ -608,13 +596,11 @@ async function main() {
         return;
     }
 
-    // AI handles doc drift detection via the prompt - now with existing docs context
-    const review = await runDeepReview(triage.files_to_audit, files, diff, architectureContext, existingDocs);
+    const review = await runDeepReview(triage.files_to_audit, files, diff, architectureContext, existingDocs, config);
     console.log(`\n🔬 Review:`, JSON.stringify(review, null, 2), '\n');
 
     await postComment(ctx, formatReviewComment(review));
 
-    // Final Reaction based on Verdict
     const finalReaction = review?.summary?.verdict === 'REQUEST_CHANGES' ? 'confused' : 'rocket';
     await addReaction(ctx, finalReaction);
 
