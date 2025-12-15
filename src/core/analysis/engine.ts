@@ -1,6 +1,7 @@
 // src/core/analysis/engine.ts
 // The Detective: Static Analysis Engine for J Star Reviewer
 // Extracts ground truth from code to prevent LLM hallucinations
+// God Mode: Now includes 11 additional deterministic detection rules.
 
 import { Project, SourceFile, SyntaxKind, Node } from 'ts-morph';
 import type {
@@ -17,6 +18,24 @@ import {
     getApiHints,
     type PackageJson,
 } from './utils/package-parser.js';
+
+// God Mode: Modular Rule Imports
+import {
+    checkFloatingPromise,
+    checkNPlusOneWaterfall,
+    checkGlobalState,
+    checkUnsafeRedirect,
+} from './rules/server-safety.js';
+import {
+    checkToxicArgs,
+    checkSecretLeak,
+    checkStaticMismatch,
+} from './rules/next-arch.js';
+import {
+    checkSequentialFetch,
+    checkHardcodedIds,
+} from './rules/context-logic.js';
+import { schemaLoader } from './context/schema-loader.js';
 
 // ============================================================
 // CLIENT HOOKS (React hooks that require 'use client')
@@ -89,7 +108,7 @@ export function analyzeFile(
     // Extract all the context
     const context = extractFileContext(sourceFile, filename);
     const imports = extractImports(sourceFile);
-    const violations = detectViolations(sourceFile, context, imports);
+    const violations = detectViolations(sourceFile, context, imports, filename);
 
     return {
         file: filename,
@@ -293,9 +312,14 @@ function extractExports(sourceFile: SourceFile): string[] {
 function detectViolations(
     sourceFile: SourceFile,
     context: FileContext,
-    imports: ImportInfo[]
+    imports: ImportInfo[],
+    filename: string = 'unknown'
 ): ContextViolation[] {
     const violations: ContextViolation[] = [];
+
+    // ==========================================================
+    // ORIGINAL RULES (1-5)
+    // ==========================================================
 
     // 1. Check for client hooks in server components
     if (context.isServerComponent) {
@@ -321,6 +345,40 @@ function detectViolations(
     if (context.isRouteHandler) {
         violations.push(...detectWrongRouteExports(sourceFile));
     }
+
+    // ==========================================================
+    // GOD MODE RULES (6-16)
+    // ==========================================================
+
+    // 6. FLOATING_PROMISE - Async calls not awaited
+    violations.push(...checkFloatingPromise(sourceFile));
+
+    // 7. N_PLUS_ONE_WATERFALL - DB call inside loop
+    violations.push(...checkNPlusOneWaterfall(sourceFile));
+
+    // 8. GLOBAL_STATE_POLLUTION - Mutable globals in serverless
+    violations.push(...checkGlobalState(sourceFile, filename));
+
+    // 9. REDIRECT_IN_TRY_CATCH - redirect() in try block
+    violations.push(...checkUnsafeRedirect(sourceFile));
+
+    // 10. TOXIC_SERVER_ACTION_ARG - Non-serializable args
+    violations.push(...checkToxicArgs(sourceFile));
+
+    // 11. SECRET_LEAK_CLIENT - Env vars in client
+    violations.push(...checkSecretLeak(sourceFile));
+
+    // 12. STATIC_EXPORT_MISMATCH - force-static conflicts
+    violations.push(...checkStaticMismatch(sourceFile, filename));
+
+    // 13. SEQUENTIAL_FETCH_OPPORTUNITY - Parallel optimization
+    violations.push(...checkSequentialFetch(sourceFile));
+
+    // 14. HARDCODED_TEST_ID - UUIDs in test files
+    violations.push(...checkHardcodedIds(sourceFile, filename));
+
+    // Note: SCHEMA_DRIFT and ORPHAN_RELATION_INCLUDE require schema context
+    // and are run separately via runSchemaAwareRules()
 
     return violations;
 }

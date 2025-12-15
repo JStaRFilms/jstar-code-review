@@ -41,15 +41,29 @@ export type FileContext = z.infer<typeof FileContextSchema>;
 export const ContextViolationSchema = z.object({
     line: z.number(),
     code: z.enum([
-        // Option A: Single-file violations
+        // Single-file violations (Original)
         'CLIENT_HOOK_IN_SERVER',      // useState/useEffect in RSC
         'SERVER_ONLY_IN_CLIENT',      // server-only import in client component
         'ASYNC_CLIENT_COMPONENT',     // async function in client component
         'MISSING_USE_CLIENT',         // Uses hooks but no directive
         'WRONG_EXPORT_PATTERN',       // export default in route handler
-        // Option B: Cross-file violations (ProjectAnalyzer)
+        // Cross-file violations (ProjectAnalyzer)
         'SERVER_ACTION_IN_CLIENT',    // Calling server action directly in client
         'DATABASE_ACCESS_IN_CLIENT',  // Calling DB function from client
+        // === GOD MODE: Server Safety ===
+        'FLOATING_PROMISE',           // Async call without await/return
+        'N_PLUS_ONE_WATERFALL',       // DB call inside loop
+        'GLOBAL_STATE_POLLUTION',     // Mutable global in serverless
+        'REDIRECT_IN_TRY_CATCH',      // redirect() inside try block
+        // === GOD MODE: Next.js Architecture ===
+        'TOXIC_SERVER_ACTION_ARG',    // Non-serializable arg to Server Action
+        'SECRET_LEAK_CLIENT',         // process.env.SECRET in "use client"
+        'STATIC_EXPORT_MISMATCH',     // force-static + dynamic params
+        // === GOD MODE: Context Intelligence ===
+        'SCHEMA_DRIFT',               // Query field not in Prisma schema
+        'SEQUENTIAL_FETCH_OPPORTUNITY', // Consecutive awaits with no dependency
+        'ORPHAN_RELATION_INCLUDE',    // Include relation not in schema
+        'HARDCODED_TEST_ID',          // UUID/Date.now() in test files
     ]),
     symbol: z.string().describe('The problematic symbol (e.g., "useState")'),
     message: z.string().describe('Human-readable explanation'),

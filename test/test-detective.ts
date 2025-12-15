@@ -15,6 +15,7 @@ interface TestCase {
 }
 
 const TEST_CASES: TestCase[] = [
+    // === ORIGINAL RULES ===
     {
         file: 'server-with-hook.tsx',
         expectedViolations: ['CLIENT_HOOK_IN_SERVER'],  // File in app/ without "use client" = Server Component
@@ -34,6 +35,32 @@ const TEST_CASES: TestCase[] = [
         file: 'valid-client-component.tsx',
         expectedViolations: [],
         description: 'Valid Client Component (no violations)',
+    },
+    // === GOD MODE RULES ===
+    {
+        file: 'floating-promise.ts',
+        expectedViolations: ['FLOATING_PROMISE'],
+        description: 'Async call without await/return (floating promise)',
+    },
+    {
+        file: 'n-plus-one.ts',
+        expectedViolations: ['N_PLUS_ONE_WATERFALL'],
+        description: 'Database call inside loop/map (N+1 query)',
+    },
+    {
+        file: 'toxic-args.tsx',
+        expectedViolations: ['TOXIC_SERVER_ACTION_ARG'],
+        description: 'Non-serializable args (Date/Map) in client component',
+    },
+    {
+        file: 'secret-leak.tsx',
+        expectedViolations: ['SECRET_LEAK_CLIENT'],
+        description: 'Non-NEXT_PUBLIC env var in client component',
+    },
+    {
+        file: 'redirect-try-catch.ts',
+        expectedViolations: ['REDIRECT_IN_TRY_CATCH'],
+        description: 'redirect() inside try-catch block',
     },
 ];
 
