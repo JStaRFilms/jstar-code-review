@@ -1,42 +1,30 @@
 {
-  "name": "jstar-code-review",
-  "version": "1.0.0",
-  "description": "J Star - AI-Powered Code Review Bot using Vercel AI SDK",
-  "type": "module",
-  "main": "src/orchestrator.ts",
+  "name": "j-star-reviewer",
+  "version": "2.0.0",
+  "description": "Local-First, Context-Aware AI Code Reviewer",
   "scripts": {
-    "review": "tsx src/orchestrator.ts",
-    "test:local": "dotenv -e .env.local -- tsx src/orchestrator.ts",
-    "test:dry": "dotenv -e .env.local -- tsx src/test-local.ts",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint src/"
+    "index:init": "ts-node scripts/indexer.ts --init",
+    "index:watch": "ts-node scripts/indexer.ts --watch",
+    "review": "ts-node scripts/reviewer.ts",
+    "detect": "ts-node scripts/detective.ts",
+    "prepare": "husky install"
   },
-  "keywords": [
-    "code-review",
-    "ai",
-    "github-actions",
-    "llm",
-    "pr-review"
-  ],
-  "author": "J Star Studios",
-  "license": "MIT",
   "dependencies": {
-    "@ai-sdk/groq": "^2.0.33",
-    "@ai-sdk/openai": "^2.0.85",
-    "@octokit/rest": "^21.0.0",
-    "ai": "^5.0.112",
-    "ts-morph": "^27.0.2",
-    "zod": "^3.23.0"
+    "llamaindex": "^0.1.0",
+    "chromadb": "^1.8.1",
+    "dotenv": "^16.3.1",
+    "openai": "^4.20.1",
+    "groq-sdk": "^0.9.1",
+    "chalk": "^4.1.2",
+    "simple-git": "^3.20.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "dotenv": "^17.2.3",
-    "dotenv-cli": "^7.4.0",
-    "eslint": "^9.0.0",
-    "tsx": "^4.0.0",
-    "typescript": "^5.5.0"
+    "husky": "^8.0.3",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2",
+    "@types/node": "^20.0.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18"
   }
 }
