@@ -1,28 +1,20 @@
 {
     "compilerOptions": {
-        "target": "ES2022",
-        "module": "NodeNext",
-        "moduleResolution": "NodeNext",
-        "lib": [
-            "ES2022"
-        ],
-        "strict": true,
+        "target": "ES2020",
+        "module": "CommonJS",
+        "moduleResolution": "node",
         "esModuleInterop": true,
+        "strict": true,
         "skipLibCheck": true,
-        "forceConsistentCasingInFileNames": true,
-        "resolveJsonModule": true,
-        "declaration": true,
-        "declarationMap": true,
         "outDir": "./dist",
-        "rootDir": "./src",
-        "noEmit": true,
-        "verbatimModuleSyntax": true
+        "rootDir": "./"
     },
     "include": [
+        "scripts/**/*",
         "src/**/*"
     ],
     "exclude": [
         "node_modules",
-        "dist"
+        "**/*.spec.ts"
     ]
 }

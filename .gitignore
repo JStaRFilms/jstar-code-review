@@ -1,36 +1,14 @@
-# --- System ---
+node_modules
+.env
 .DS_Store
-Thumbs.db
-*.log
+dist
 
-# --- CreativeOS ---
-.project_meta.json
-*_old
-*_backup
+# J-Star Index (The Brain)
+.jstar/
 
-# --- Python / AI ---
-__pycache__/
-*.py[cod]
-*$py.class
-venv/
-.venv/
+# Environment
 .env
 .env.local
-.env*.local
-*.pkl
-*.pth
-*.safetensors
-
-# --- Node / Web ---
-node_modules/
-dist/
-build/
-.next/
-coverage/
-.npm
-*.log
-
-# --- IDEs ---
-.vscode/
-.idea/
-*.swp
+.env.development.local
+.env.test.local
+.env.production.local

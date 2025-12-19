@@ -1,174 +1,133 @@
-# J Star Code Reviewer
+# J-Star Code Reviewer
 
-AI-powered PR review bot that uses the **Two-Stage Pipeline** to save costs while catching critical issues.
+**Local-first, context-aware AI code reviewer** powered by LlamaIndex + Groq.
 
-## 🧠 Architecture
+## ✨ Features
 
-```
-PR Opened
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│  STAGE 1: TRIAGE (Llama 17B)            │
-│  • Cheap & Fast                         │
-│  • Classifies risk & priority           │
-└─────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│  STAGE 2: DOC DRIFT CHECK (New!)        │
-│  • "Vibe Check": Did you add a feature  │
-│     but forget the docs?                │
-│  • Auto-generates fix prompts for docs  │
-└─────────────────────────────────────────┘
-    │
-    ▼ (If needed)
-┌─────────────────────────────────────────┐
-│  STAGE 3: DEEP REVIEW (Kimi k2)         │
-│  • Reads .jstar/rules.md for context    │
-│  • Reviews logic with full awareness    │
-└─────────────────────────────────────────┘
+- **Local Vector Index** — Embeddings stored locally, no external DB
+- **Gemini Embeddings** — Free tier friendly, no OpenAI key needed
+- **Chunked Reviews** — Handles large diffs without rate limits
+- **Detective Engine** — Deterministic checks for common issues
+- **Dashboard Output** — Professional review reports with fix prompts
+- **One-Curl Install** — Add to any repo in seconds
+
+---
+
+## 🚀 Quick Install (Any Repo)
+
+```bash
+# Option 1: npx (recommended)
+npx jstar-reviewer init
+
+# Option 2: curl
+curl -fsSL https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/main/setup.js | node
 ```
 
-## 🗂️ Project Structure
+Then:
+1. Copy `.env.example` → `.env.local`
+2. Add your `GOOGLE_API_KEY` and `GROQ_API_KEY`
+3. Run `pnpm run index:init` to build the brain
+4. Run `pnpm run review` to review staged changes
+
+---
 
 ```
-.
-├── .github/workflows/jstar-review.yml    # GitHub Action trigger
-├── src/
-│   ├── orchestrator.ts                   # Main runner (Two-Stage Pipeline)
-│   ├── prompts.ts                        # System prompts for triage & review
-│   └── types.ts                          # Zod schemas for structured output
-├── .env.example                          # Environment variable template
-├── package.json
-└── tsconfig.json
+git diff --staged
+       │
+       ▼
+┌──────────────────┐
+│  Detective       │  ← Static analysis (secrets, console.log, "use client")
+│  Engine          │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Local Brain     │  ← Gemini embeddings via LlamaIndex
+│  (Retrieval)     │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Chunked Review  │  ← Splits diff by file, delays between calls
+│  Queue           │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Groq LLM        │  ← moonshotai/kimi-k2-instruct-0905
+│  (The Judge)     │
+└────────┬─────────┘
+         │
+         ▼
+   📝 Review Report
 ```
 
 ## 🚀 Quick Start
 
-### Option A: Add to Any Repository (Recommended)
-
-See **[docs/SPAWN_GUIDE.md](docs/SPAWN_GUIDE.md)** for a complete guide to spawn J Star in any repo.
-
-**TL;DR:**
-1. Copy `.github/workflows/spawn-template.yml` to your repo as `.github/workflows/jstar-review.yml`
-2. Add `GROQ_API_KEY` to your repo secrets
-3. Done! 🎉
-
----
-
-### Option B: Clone and Self-Host
-
-#### 1. Clone and Install
+### 1. Install Dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
-#### 2. Set Secrets in GitHub
+### 2. Set Environment Variables
 
-Go to your repo → Settings → Secrets and variables → Actions:
+Create `.env.local`:
 
-| Secret | Description |
-|--------|-------------|
-| `GROQ_API_KEY` | Your Groq API key from [console.groq.com](https://console.groq.com) |
+```env
+GOOGLE_API_KEY=your_gemini_key
+GROQ_API_KEY=your_groq_key
+```
 
-> `GITHUB_TOKEN` is automatically provided by GitHub Actions.
-
-> `GITHUB_TOKEN` is automatically provided by GitHub Actions.
-
-#### 3. (Optional) Tune AI Performance
-
-Add these optional secrets or variables to customize the review process:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AI_CONCURRENCY` | `1` | Number of files to review in parallel. Set to `1` for low-tier (10k TPM) keys. Increase to `3-5` for high-tier. |
-| `AI_MAX_RETRIES` | `3` | Number of times to retry a failed/rate-limited AI call. |
-| `AI_RETRY_DELAY` | `2000` | Initial delay in ms before retrying (exponential backoff applied). |
-| `AI_BACKOFF_FACTOR` | `2` | Multiplier for delay after each retry. |
-
-#### 4. Done!
-
-Open a PR and watch J Star review it.
-
-
-## 🧪 Local Testing
+### 3. Index Your Codebase
 
 ```bash
-# 1. Copy env template
-cp .env.example .env.local
-
-# 2. Fill in your values in .env.local
-
-# 3. Run locally
-npm run test:local
+pnpm run index:init
 ```
 
-## 🎛️ Configuration
+### 4. Review Staged Changes
 
-### Using Different Models
+```bash
+git add <files>
+pnpm run review
+```
 
-Edit `src/orchestrator.ts` to swap providers:
+## 📁 Project Structure
+
+```
+scripts/
+├── indexer.ts          # Scans codebase, builds vector index
+├── reviewer.ts         # Orchestrates review pipeline
+├── detective.ts        # Static analysis engine
+├── gemini-embedding.ts # Google Gemini adapter
+└── mock-llm.ts         # LlamaIndex compatibility stub
+
+.jstar/
+└── storage/            # Persisted embeddings (gitignored)
+
+docs/features/
+├── architecture-v2.md  # Full architecture docs
+├── detective.md        # Static analysis rules
+├── analyst.md          # LLM reviewer (The Judge)
+└── ...
+```
+
+## ⚙️ Configuration
+
+Edit `scripts/reviewer.ts`:
 
 ```typescript
-// Use Anthropic Claude
-import { anthropic } from '@ai-sdk/anthropic';
-const model = anthropic('claude-3-5-sonnet-20241022');
-
-// Use local Ollama
-import { ollama } from 'ollama-ai-provider';
-const model = ollama('llama3.2');
-
-// Use Groq (fast & cheap)
-import { groq } from '@ai-sdk/groq';
-const model = groq('llama-3.1-70b-versatile');
+const MODEL_NAME = "moonshotai/kimi-k2-instruct-0905";
+const MAX_TOKENS_PER_REQUEST = 8000;
+const DELAY_BETWEEN_CHUNKS_MS = 2000;
 ```
 
-### Customizing Prompts
+## 📚 Documentation
 
-Edit `src/prompts.ts` to adjust:
-- **Tone Matrix** — How formal/casual the bot sounds
-- **Focus Areas** — What file types to prioritize
-- **Ignore Rules** — What to skip (lockfiles, images, etc.)
-
-### 🧠 Train Your Bot (Repository Context)
-
-Make the bot smarter by adding a `.jstar/` folder to the root of your repository. The bot reads these files to understand your specific context:
-
-| File | Purpose | Example Content |
-|------|---------|-----------------|
-| `.jstar/architecture.md` | Explains your tech stack. | "We use Next.js 15, Prisma, and Tailwind v4. Avoid raw CSS." |
-| `.jstar/rules.md` | Hard coding laws. | "1. No `any` types.\n2. Always use `zod` for API validation." |
-| `.jstar/memory.md` | Persistent memory of past mistakes. | "Recurring issue: SQL injection in auth. Check strictly." |
-
-## 📊 Output Example
-
-```markdown
-## 🔴 J Star Review
-
-**Verdict:** ❌ REQUEST_CHANGES | **Safety Score:** 42/100
-
----
-
-### 🚨 CRITICAL (1)
-
-#### `src/auth/login.ts` — Line 47 [`SECURITY`]
-
-> Missing rate limiting on login endpoint allows brute force attacks.
-
-<details>
-<summary>🤖 AI Fix Prompt</summary>
-
-Implement rate limiting on the /api/auth/login endpoint. Use a sliding window 
-of 5 attempts per minute per IP. Return 429 Too Many Requests when exceeded.
-
-</details>
-```
-
-## ⚡ Manual Trigger
-
-Comment `/review` on any PR to force a review.
+- [Architecture v2](docs/features/architecture-v2.md)
+- [Detective Engine](docs/features/detective.md)
+- [Token Budget](docs/features/token-budget.md)
+- [Chunked Reviews](docs/features/map-reduce.md)
 
 ---
 

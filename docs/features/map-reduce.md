@@ -1,66 +1,97 @@
-# Map-Reduce Chunking
+# Chunked Review System
 
-Scaling solution for reviewing large PRs without hitting token limits.
+> **Version:** v2  
+> **Last Updated:** 2025-12-18
 
 ## Problem
-Large diffs (>10k tokens) exceed the LLM's context window or Groq's TPM (Tokens Per Minute) rate limits. Single-shot review fails.
 
-## Solution: Chunked Map-Reduce
+Large diffs (>10k tokens) exceed Groq's TPM limits. Single-shot review fails with:
 
-### 1. Split (Parse)
-The unified diff is parsed into per-file chunks:
-```typescript
-const fileDiffs = splitDiffByFile(diff);
-// Returns: [{ filename: 'auth.ts', diff: '...' }, ...]
+```
+❌ Request too large for model: Limit 10000, Requested 17489
 ```
 
-### 2. Map (Review Each File)
-Each file chunk is reviewed independently in parallel batches:
+## Solution: Chunked Serial Processing
+
+### 1. Split (Chunk by File)
+
 ```typescript
-const BATCH_SIZE = parseInt(process.env.AI_CONCURRENCY) || 1; // Default 1 (Sequential)
-for (let i = 0; i < relevantDiffs.length; i += BATCH_SIZE) {
-  const batch = relevantDiffs.slice(i, i + BATCH_SIZE);
-  const batchResults = await Promise.all(batch.map(fd => reviewFileChunk(...)));
+function chunkDiffByFile(diff: string): string[] {
+    return diff.split(/(?=diff --git)/g).filter(Boolean);
 }
 ```
 
-Configurable via `AI_CONCURRENCY`. Set to `1` for strict rate limits (default), or `3-5` for higher tiers.
+### 2. Filter (Skip Excluded Files)
 
-### 3. Reduce (Aggregate)
-All chunk results are combined into a final `JStarReviewResult`:
-- Findings are merged into a single array.
-- Quality scores are averaged across all reviewed files.
-- Verdict is determined by worst-case severity.
+```typescript
+const EXCLUDED_PATTERNS = [
+    /pnpm-lock\.yaml/,
+    /\.env/,
+    /\.json$/,
+    /\.md$/,
+    /\.jstar\//,
+];
+```
+
+### 3. Estimate (Check Token Budget)
+
+```typescript
+const chunkTokens = estimateTokens(chunk) + estimateTokens(systemPrompt);
+if (chunkTokens > MAX_TOKENS_PER_REQUEST) {
+    console.log(`⚠️ Skipping ${fileName} (too large)`);
+    continue;
+}
+```
+
+### 4. Review (Serial with Delay)
+
+```typescript
+for (const chunk of fileChunks) {
+    const { text } = await generateText({ model, prompt });
+    reviews.push(text);
+    await sleep(DELAY_BETWEEN_CHUNKS_MS); // 2s delay
+}
+```
+
+### 5. Aggregate (Combine Reports)
+
+```typescript
+console.log(reviews.join("\n\n---\n\n"));
+```
 
 ## Flow Diagram
-```
-┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-│   File A     │      │   File B     │      │   File C     │
-│   Diff       │      │   Diff       │      │   Diff       │
-└──────┬───────┘      └──────┬───────┘      └──────┬───────┘
-       │                     │                     │
-       ▼                     ▼                     ▼
-  ┌─────────┐           ┌─────────┐           ┌─────────┐
-  │ Review A│           │ Review B│           │ Review C│
-  └────┬────┘           └────┬────┘           └────┬────┘
-       │                     │                     │
-       └──────────────┬──────┴─────────────────────┘
-                      ▼
-               ┌────────────┐
-               │  Aggregate │
-               │  Findings  │
-               └────────────┘
-```
 
-## Threshold
-- **Single-Shot:** Used when estimated tokens ≤ 8000.
-- **Chunked:** Used when estimated tokens > 8000.
-
-Token estimation: `Math.ceil(diff.length / 4)` (rough 4 chars per token).
+```
+┌──────────────┐
+│  Git Diff    │
+│  (--staged)  │
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   File A     │     │   File B     │     │   File C     │
+│   Chunk      │     │   Chunk      │     │   (Skipped)  │
+└──────┬───────┘     └──────┬───────┘     └──────────────┘
+       │                    │
+       ▼ (2s delay)         ▼ (2s delay)
+  ┌─────────┐          ┌─────────┐
+  │ Review A│          │ Review B│
+  └────┬────┘          └────┬────┘
+       │                    │
+       └────────┬───────────┘
+                ▼
+         ┌────────────┐
+         │  Final     │
+         │  Report    │
+         └────────────┘
+```
 
 ## Error Handling
-If a single file review fails, it returns a fallback:
+
+If a chunk review fails (rate limit, network error):
+
 ```typescript
-return { file: filename, findings: [], quality_score: 0 };
+reviews.push(`### ${fileName}\n❌ Review failed: Rate limit hit.`);
 ```
-This ensures one bad file doesn't crash the entire review.
+
+The review continues to the next chunk instead of crashing.

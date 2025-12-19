@@ -1,0 +1,4 @@
+onlyBuiltDependencies:
+  - '@datastax/astra-db-ts'
+  - protobufjs
+  - sharp
