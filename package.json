@@ -1,11 +1,12 @@
 {
   "name": "jstar-reviewer",
-  "version": "2.0.1",
+  "version": "2.0.4",
   "description": "Local-First, Context-Aware AI Code Reviewer - Works with any language",
   "bin": {
     "jstar": "bin/jstar.js"
   },
   "scripts": {
+    "build": "tsc",
     "index:init": "ts-node scripts/indexer.ts --init",
     "index:watch": "ts-node scripts/indexer.ts --watch",
     "review": "ts-node scripts/reviewer.ts",
@@ -50,6 +51,7 @@
   "files": [
     "bin/",
     "scripts/",
+    "dist/",
     "README.md"
   ],
   "main": "setup.js",

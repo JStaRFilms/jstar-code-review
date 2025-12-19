@@ -70,26 +70,54 @@ function commandExists(cmd) {
 }
 
 function runScript(scriptName) {
-    const scriptsDir = path.join(__dirname, '..', 'scripts');
-    const scriptPath = path.join(scriptsDir, scriptName);
+    // Look for transpiled files in dist/
+    // .ts becomes .js in dist
+    const jsName = scriptName.replace('.ts', '.js');
+    const distDir = path.join(__dirname, '..', 'dist', 'scripts');
+    const jsPath = path.join(distDir, jsName);
 
-    if (!fs.existsSync(scriptPath)) {
+    // Fallback for local development if dist doesn't exist
+    const scriptsDir = path.join(__dirname, '..', 'scripts');
+    const tsPath = path.join(scriptsDir, scriptName);
+
+    const isWin = process.platform === 'win32';
+
+    if (fs.existsSync(jsPath)) {
+        log(`${COLORS.dim}Running ${jsName}...${COLORS.reset}`);
+        const child = spawn('node', [jsPath, ...process.argv.slice(3)], {
+            cwd: process.cwd(),
+            stdio: 'inherit',
+            shell: isWin,
+            env: {
+                ...process.env,
+                JSTAR_CWD: process.cwd()
+            }
+        });
+
+        child.on('close', (code) => process.exit(code || 0));
+        child.on('error', (err) => {
+            log(`${COLORS.red}Error running script: ${err.message}${COLORS.reset}`);
+            process.exit(1);
+        });
+        return;
+    }
+
+    if (!fs.existsSync(tsPath)) {
         log(`${COLORS.red}Error: Script not found: ${scriptPath}${COLORS.reset}`);
         process.exit(1);
     }
 
-    // Prioritize pnpm if available
+    // Fallback to ts-node if dist is not built (mostly for local development)
     const hasPnpm = commandExists('pnpm');
     const runner = hasPnpm ? 'pnpm' : 'npx';
     const runnerArgs = hasPnpm ? ['dlx', 'ts-node'] : ['ts-node'];
 
-    log(`${COLORS.dim}Using ${runner} to run ${scriptName}...${COLORS.reset}`);
+    log(`${COLORS.dim}Using ${runner} (fallback) to run ${scriptName}...${COLORS.reset}`);
 
-    // Run without shell: true to avoid security warnings
-    // On Windows, pnpm/npx are .cmd files, handled normally by spawn without shell if extension is omitted
-    const child = spawn(runner, [...runnerArgs, scriptPath, ...process.argv.slice(3)], {
+    const child = spawn(runner, [...runnerArgs, tsPath, ...process.argv.slice(3)], {
         cwd: process.cwd(),
         stdio: 'inherit',
+        shell: isWin,
         env: {
             ...process.env,
             JSTAR_CWD: process.cwd()
