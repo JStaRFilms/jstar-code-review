@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "description": "Local-First, Context-Aware AI Code Reviewer - Works with any language",
   "bin": {
-    "jstar": "./bin/jstar.js"
+    "jstar": "bin/jstar.js"
   },
   "scripts": {
     "index:init": "ts-node scripts/indexer.ts --init",
@@ -25,7 +25,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/JStaRFilms/jstar-code-review.git"
+    "url": "git+https://github.com/JStaRFilms/jstar-code-review.git"
   },
   "homepage": "https://github.com/JStaRFilms/jstar-code-review#readme",
   "dependencies": {
@@ -51,5 +51,14 @@
     "bin/",
     "scripts/",
     "README.md"
-  ]
+  ],
+  "main": "setup.js",
+  "directories": {
+    "doc": "docs",
+    "test": "test"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/JStaRFilms/jstar-code-review/issues"
+  }
 }
