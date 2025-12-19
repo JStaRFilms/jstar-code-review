@@ -9,7 +9,7 @@
  *   jstar setup    - Set up config in current project
  */
 
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -57,6 +57,18 @@ ${COLORS.dim}Report issues: https://github.com/JStaRFilms/jstar-code-review${COL
 `);
 }
 
+/**
+ * Check if a command exists
+ */
+function commandExists(cmd) {
+    try {
+        execSync(process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`, { stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 function runScript(scriptName) {
     const scriptsDir = path.join(__dirname, '..', 'scripts');
     const scriptPath = path.join(scriptsDir, scriptName);
@@ -66,14 +78,20 @@ function runScript(scriptName) {
         process.exit(1);
     }
 
-    // Use ts-node to run TypeScript files
-    const child = spawn('npx', ['ts-node', scriptPath, ...process.argv.slice(3)], {
+    // Prioritize pnpm if available
+    const hasPnpm = commandExists('pnpm');
+    const runner = hasPnpm ? 'pnpm' : 'npx';
+    const runnerArgs = hasPnpm ? ['dlx', 'ts-node'] : ['ts-node'];
+
+    log(`${COLORS.dim}Using ${runner} to run ${scriptName}...${COLORS.reset}`);
+
+    // Run without shell: true to avoid security warnings
+    // On Windows, pnpm/npx are .cmd files, handled normally by spawn without shell if extension is omitted
+    const child = spawn(runner, [...runnerArgs, scriptPath, ...process.argv.slice(3)], {
         cwd: process.cwd(),
         stdio: 'inherit',
-        shell: true,
         env: {
             ...process.env,
-            // Pass through the working directory for the scripts
             JSTAR_CWD: process.cwd()
         }
     });
