@@ -2,6 +2,8 @@
 
 **Local-first, context-aware AI code reviewer** powered by LlamaIndex + Groq.
 
+Works with **any language** — TypeScript, Python, Rust, Go, you name it.
+
 ## ✨ Features
 
 - **Local Vector Index** — Embeddings stored locally, no external DB
@@ -9,25 +11,36 @@
 - **Chunked Reviews** — Handles large diffs without rate limits
 - **Detective Engine** — Deterministic checks for common issues
 - **Dashboard Output** — Professional review reports with fix prompts
-- **One-Curl Install** — Add to any repo in seconds
+- **Global CLI** — Install once, use in any project
 
 ---
 
-## 🚀 Quick Install (Any Repo)
+## 🚀 Quick Install
+
+### Option 1: Global CLI (Recommended)
 
 ```bash
-# Option 1: npx (recommended)
-npx jstar-reviewer init
+# Install globally
+npm install -g jstar-reviewer
 
-# Option 2: curl
-curl -fsSL https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/main/setup.js | node
+# In any project directory:
+jstar setup      # Create config files
+jstar init       # Index the codebase
+jstar review     # Review staged changes
 ```
 
-Then:
+### Option 2: One-Curl (Adds to current project)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/v2.0.0/setup.js | node
+```
+
+### After Install:
+
 1. Copy `.env.example` → `.env.local`
 2. Add your `GOOGLE_API_KEY` and `GROQ_API_KEY`
-3. Run `pnpm run index:init` to build the brain
-4. Run `pnpm run review` to review staged changes
+3. Run `jstar init` to build the brain
+4. Run `jstar review` to review staged changes
 
 ---
 
