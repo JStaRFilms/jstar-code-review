@@ -9,11 +9,44 @@ import { MockLLM } from "./mock-llm";
 import * as path from "path";
 import * as fs from "fs";
 import chalk from "chalk";
-import { Config } from "./config";
+// IMPORTANT: Import config for side effects (loads dotenv from cwd)
+import "./config";
 
 // Configuration
 const STORAGE_DIR = path.join(process.cwd(), ".jstar", "storage");
-const SOURCE_DIR = path.join(process.cwd(), "scripts"); // Changed from src/ to scripts/
+
+// Smart source directory detection
+function getSourceDir(): string {
+    const cwd = process.cwd();
+
+    // 1. Check for --path argument
+    const args = process.argv.slice(2);
+    const pathArgIndex = args.indexOf('--path');
+    if (pathArgIndex !== -1 && args[pathArgIndex + 1]) {
+        const customPath = path.resolve(cwd, args[pathArgIndex + 1]);
+        if (fs.existsSync(customPath)) {
+            return customPath;
+        }
+        console.error(chalk.red(`❌ Custom path not found: ${customPath}`));
+        process.exit(1);
+    }
+
+    // 2. Try common source directories
+    const candidates = ['src', 'lib', 'app', 'scripts', '.'];
+    for (const dir of candidates) {
+        const fullPath = path.join(cwd, dir);
+        if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
+            // Skip '.' if there's a more specific match
+            if (dir === '.' && candidates.slice(0, -1).some(d => fs.existsSync(path.join(cwd, d)))) {
+                continue;
+            }
+            return fullPath;
+        }
+    }
+
+    // Default to cwd
+    return cwd;
+}
 
 async function main() {
     // 0. Environment Validation
@@ -25,9 +58,10 @@ async function main() {
 
     const args = process.argv.slice(2);
     const isWatch = args.includes("--watch");
+    const SOURCE_DIR = getSourceDir();
 
     console.log(chalk.blue("🧠 J-Star Indexer: Scanning codebase..."));
-
+    console.log(chalk.dim(`   Source: ${SOURCE_DIR}`));
 
     // 1. Load documents (Your Code)
     if (!fs.existsSync(SOURCE_DIR)) {
@@ -91,8 +125,8 @@ async function main() {
 
     } catch (e: any) {
         console.error(chalk.red("❌ Indexing Failed:"), e.message);
-        if (e.message.includes("OpenAI")) {
-            console.log(chalk.yellow("👉 Tip: Make sure you have OPENAI_API_KEY in your .env file (or configure a local embedding model)."));
+        if (e.message.includes("API") || e.message.includes("key")) {
+            console.log(chalk.yellow("👉 Tip: Make sure you have GOOGLE_API_KEY in your .env.local file."));
         }
         process.exit(1);
     }

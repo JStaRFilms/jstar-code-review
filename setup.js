@@ -115,7 +115,7 @@ async function main() {
 
     // HARDCODED: Tagged release URL - NOT configurable for security
     // To update, modify this constant and publish a new version of setup.js
-    const BASE_URL = 'https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/v2.1.0';
+    const BASE_URL = 'https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/v2.1.3';
 
     // Validate URL matches our exact expected pattern (defense in depth)
     function isValidUrl(url) {
