@@ -9,7 +9,7 @@ This workflow executes the J-Star Reviewer on staged changes, allowing the agent
 ## 1. Build the Brain (Required once)
 If you haven't indexed the project yet, or if major files have changed, run:
 ```bash
-pnpm run index:init
+jstar init
 ```
 
 ## 2. Stage Current Changes
@@ -22,8 +22,9 @@ git add .
 ## 3. Run Reviewer
 Execute the review pipeline.
 ```bash
-pnpm run review
+jstar review
 ```
+
 
 ## 4. Analyze and Fix
 **Agent Instructions:**

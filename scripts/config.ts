@@ -42,9 +42,11 @@ function ensureSetup() {
 // Run setup check
 ensureSetup();
 
-// Load .env.local first, then .env
-dotenv.config({ path: ".env.local" });
-dotenv.config();
+// Load .env.local first, then .env - USE ABSOLUTE PATHS based on CWD
+// This is critical for global CLI usage where the package is installed elsewhere
+const cwd = process.cwd();
+dotenv.config({ path: path.join(cwd, ".env.local") });
+dotenv.config({ path: path.join(cwd, ".env") });
 
 /**
  * Default fallback values.
