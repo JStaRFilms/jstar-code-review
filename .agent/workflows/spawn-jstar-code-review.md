@@ -17,16 +17,18 @@ Works with **any programming language** — TypeScript, Python, Rust, Go, etc.
 npm install -g jstar-reviewer
 ```
 
-### 2. Set Up Config in Current Project
+### 2. Run your First Command
 // turbo
 ```bash
 jstar setup
 ```
+*(Or simply run `jstar review` if you already have your keys ready)*
 
-This creates:
+This **auto-creates** (or updates):
 - `.jstar/` directory
 - `.env.example` with required variables
-- Updates `.gitignore`
+- `.gitignore` (appends `.jstar/` and `.env.local`)
+
 
 ### 3. Configure Environment Variables
 ```bash

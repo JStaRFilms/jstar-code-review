@@ -9,27 +9,25 @@ import { MockLLM } from "./mock-llm";
 import * as path from "path";
 import * as fs from "fs";
 import chalk from "chalk";
-import dotenv from "dotenv";
-
-// Load .env.local first, then .env
-dotenv.config({ path: ".env.local" });
-dotenv.config();
+import { Config } from "./config";
 
 // Configuration
 const STORAGE_DIR = path.join(process.cwd(), ".jstar", "storage");
 const SOURCE_DIR = path.join(process.cwd(), "scripts"); // Changed from src/ to scripts/
 
-// Ensure OpenAI Key exists (LlamaIndex default) or fallback if we configured something else
-// (We are using local now, so this check is less critical, but good to have if we revert)
-// if (!process.env.OPENAI_API_KEY) {
-//     console.warn(chalk.yellow("⚠️  OPENAI_API_KEY not found. Embeddings may fail unless you have configured a local model."));
-// }
-
 async function main() {
+    // 0. Environment Validation
+    if (!process.env.GOOGLE_API_KEY) {
+        console.error(chalk.red("❌ Missing GOOGLE_API_KEY!"));
+        console.log(chalk.yellow("\nPlease ensure you have a .env.local file. Check .env.example for a template.\n"));
+        process.exit(1);
+    }
+
     const args = process.argv.slice(2);
     const isWatch = args.includes("--watch");
 
     console.log(chalk.blue("🧠 J-Star Indexer: Scanning codebase..."));
+
 
     // 1. Load documents (Your Code)
     if (!fs.existsSync(SOURCE_DIR)) {

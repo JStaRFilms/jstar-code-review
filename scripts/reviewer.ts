@@ -109,8 +109,19 @@ function parseReviewResponse(text: string): LLMReviewResponse {
 async function main() {
     console.log(chalk.blue("🕵️  J-Star Reviewer: Analyzing your changes...\n"));
 
-    // 0. Detective
+    // 0. Environment Validation
+    if (!process.env.GOOGLE_API_KEY || !process.env.GROQ_API_KEY) {
+        console.error(chalk.red("❌ Missing API Keys!"));
+        console.log(chalk.yellow("\nPlease ensure you have a .env.local file with:"));
+        console.log(chalk.white("- GOOGLE_API_KEY"));
+        console.log(chalk.white("- GROQ_API_KEY"));
+        console.log(chalk.white("\nCheck .env.example for a template.\n"));
+        return;
+    }
+
+    // 1. Detective
     console.log(chalk.blue("🔎 Running Detective Engine..."));
+
     const detective = new Detective(SOURCE_DIR);
     await detective.scan();
     detective.report();

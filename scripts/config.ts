@@ -1,5 +1,46 @@
 import dotenv from "dotenv";
+import * as fs from "fs";
+import * as path from "path";
 import { Severity } from "./types";
+
+// --- Auto-Setup Logic ---
+const REQUIRED_ENV_VARS = {
+    'GOOGLE_API_KEY': '# Required: Google API key for Gemini embeddings\nGOOGLE_API_KEY=your_google_api_key_here',
+    'GROQ_API_KEY': '# Required: Groq API key for LLM reviews\nGROQ_API_KEY=your_groq_api_key_here',
+    'REVIEW_MODEL_NAME': '# Optional: Override the default model\n# REVIEW_MODEL_NAME=moonshotai/kimi-k2-instruct-0905'
+};
+
+function ensureSetup() {
+    const cwd = process.cwd();
+    const jstarDir = path.join(cwd, ".jstar");
+    const envExamplePath = path.join(cwd, ".env.example");
+
+    // 1. Ensure .jstar exists
+    if (!fs.existsSync(jstarDir)) {
+        fs.mkdirSync(jstarDir, { recursive: true });
+    }
+
+    // 2. Ensure .env.example is up to date
+    if (fs.existsSync(envExamplePath)) {
+        let content = fs.readFileSync(envExamplePath, 'utf-8');
+        let missing = false;
+        for (const [key, template] of Object.entries(REQUIRED_ENV_VARS)) {
+            if (!content.includes(key)) {
+                content += `\n${template}\n`;
+                missing = true;
+            }
+        }
+        if (missing) {
+            fs.writeFileSync(envExamplePath, content);
+        }
+    } else {
+        const initialEnv = "# J-Star Code Reviewer\n" + Object.values(REQUIRED_ENV_VARS).join("\n") + "\n";
+        fs.writeFileSync(envExamplePath, initialEnv);
+    }
+}
+
+// Run setup check
+ensureSetup();
 
 // Load .env.local first, then .env
 dotenv.config({ path: ".env.local" });
@@ -7,8 +48,6 @@ dotenv.config();
 
 /**
  * Default fallback values.
- * These are intentional fallbacks when environment variables are not configured.
- * Override via REVIEW_MODEL_NAME env var for production use.
  */
 const DEFAULT_MODEL = "moonshotai/kimi-k2-instruct-0905";
 
@@ -19,3 +58,4 @@ export const Config = {
         MEDIUM: 5
     }
 };
+

@@ -134,34 +134,47 @@ function runScript(scriptName) {
     });
 }
 
+const REQUIRED_ENV_VARS = {
+    'GOOGLE_API_KEY': '# Required: Google API key for Gemini embeddings\nGOOGLE_API_KEY=your_google_api_key_here',
+    'GROQ_API_KEY': '# Required: Groq API key for LLM reviews\nGROQ_API_KEY=your_groq_api_key_here',
+    'REVIEW_MODEL_NAME': '# Optional: Override the default model\n# REVIEW_MODEL_NAME=moonshotai/kimi-k2-instruct-0905'
+};
+
 function createSetupFiles() {
     const cwd = process.cwd();
 
-    // Create .jstar directory
+    // 1. Create .jstar directory
     const jstarDir = path.join(cwd, '.jstar');
     if (!fs.existsSync(jstarDir)) {
         fs.mkdirSync(jstarDir, { recursive: true });
         log(`${COLORS.green}✓${COLORS.reset} Created .jstar/`);
     }
 
-    // Create .env.example
-    const envExample = `# J-Star Reviewer Configuration
-# Copy this to .env.local and fill in your keys
+    // 2. Create/Update .env.example
+    const envExamplePath = path.join(cwd, '.env.example');
+    if (fs.existsSync(envExamplePath)) {
+        let content = fs.readFileSync(envExamplePath, 'utf-8');
+        let addedKeys = [];
 
-# Required: Google API key for Gemini embeddings
-GOOGLE_API_KEY=your_google_api_key_here
+        for (const [key, template] of Object.entries(REQUIRED_ENV_VARS)) {
+            if (!content.includes(key)) {
+                content += '\n' + template + '\n';
+                addedKeys.push(key);
+            }
+        }
 
-# Required: Groq API key for LLM reviews
-GROQ_API_KEY=your_groq_api_key_here
-`;
-
-    const envPath = path.join(cwd, '.env.example');
-    if (!fs.existsSync(envPath)) {
-        fs.writeFileSync(envPath, envExample);
-        log(`${COLORS.green}✓${COLORS.reset} Created .env.example`);
+        if (addedKeys.length > 0) {
+            fs.writeFileSync(envExamplePath, content);
+            log(`${COLORS.green}✓${COLORS.reset} Updated .env.example with missing keys: ${addedKeys.join(', ')}`);
+        } else {
+            log(`${COLORS.dim}  .env.example already exists and is up to date${COLORS.reset}`);
+        }
     } else {
-        log(`${COLORS.dim}  .env.example already exists${COLORS.reset}`);
+        const initialEnv = "# J-Star Code Reviewer\n" + Object.values(REQUIRED_ENV_VARS).join("\n") + "\n";
+        fs.writeFileSync(envExamplePath, initialEnv);
+        log(`${COLORS.green}✓${COLORS.reset} Created .env.example`);
     }
+
 
     // Update .gitignore
     const gitignorePath = path.join(cwd, '.gitignore');
