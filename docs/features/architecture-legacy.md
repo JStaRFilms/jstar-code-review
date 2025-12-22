@@ -1,3 +1,8 @@
+# [DEPRECATED] J Star Reviewer - Architecture (v1)
+
+> **⚠️ WARNING:** This document describes v1 of the architecture. The current codebase uses v2 (Local-First).
+> Please refer to [architecture-v2.md](./architecture-v2.md) for the current design.
+
 # J Star Reviewer - Architecture
 
 ## Overview

@@ -62,14 +62,9 @@ J-Star Reviewer v2 is a **local-first, context-aware AI code reviewer**. It uses
 
 ## Key Components
 
-### `scripts/indexer.ts`
-Scans the codebase and builds a local vector index.
-- **Input:** `scripts/` directory
-- **Output:** `.jstar/storage/` (persisted embeddings)
-- **Embedding Model:** `text-embedding-004` (Google Gemini)
-
 ### `scripts/reviewer.ts`
-Orchestrates the review process.
+[📖 See Feature Doc](./reviewer-core.md)
+Orchestrates the review process:
 - Runs Detective Engine
 - Loads diff and chunks by file
 - Retrieves context from local brain
@@ -77,10 +72,22 @@ Orchestrates the review process.
 - Aggregates final report
 
 ### `scripts/detective.ts`
-Deterministic static analysis engine.
+[📖 See Feature Doc](./detective-engine.md)
+Deterministic static analysis engine:
 - **SEC-001:** Hardcoded secrets
 - **ARCH-001:** `console.log` in production
 - **ARCH-002:** `"use client"` placement
+
+### `scripts/indexer.ts`
+[📖 See Feature Doc](./indexer-brain.md)
+Scans the codebase and builds a local vector index:
+- **Input:** `scripts/` directory
+- **Output:** `.jstar/storage/` (persisted embeddings)
+- **Embedding Model:** `text-embedding-004` (Google Gemini)
+
+### `scripts/dashboard.ts`
+[📖 See Feature Doc](./dashboard-reporter.md)
+Generates the final Markdown report logic.
 
 ### `scripts/gemini-embedding.ts`
 Custom embedding adapter for Google Gemini.
@@ -88,9 +95,17 @@ Custom embedding adapter for Google Gemini.
 - Serial processing to respect free-tier limits
 
 ### `scripts/mock-llm.ts`
-Mock LLM to satisfy LlamaIndex dependencies during indexing (no actual LLM needed for embeddings).
+Mock LLM to satisfy LlamaIndex dependencies during indexing.
 
 ---
+
+## Detailed Feature Documentation
+
+- [🕵️ Detective Engine](./detective-engine.md)
+- [🧠 Indexer & Local Brain](./indexer-brain.md)
+- [⚖️ Reviewer Core](./reviewer-core.md)
+- [💻 CLI Reference](./cli-commands.md)
+- [📊 Dashboard & Reporting](./dashboard-reporter.md)
 
 ## Environment Variables
 
