@@ -1,6 +1,6 @@
 {
   "name": "jstar-reviewer",
-  "version": "2.1.4",
+  "version": "2.2.0",
   "description": "Local-First, Context-Aware AI Code Reviewer - Works with any language",
   "bin": {
     "jstar": "bin/jstar.js"
@@ -10,6 +10,7 @@
     "index:init": "ts-node scripts/indexer.ts --init",
     "index:watch": "ts-node scripts/indexer.ts --watch",
     "review": "ts-node scripts/reviewer.ts",
+    "chat": "ts-node scripts/chat.ts",
     "detect": "ts-node scripts/detective.ts",
     "prepare": "husky install"
   },
@@ -37,13 +38,15 @@
     "chalk": "^4.1.2",
     "dotenv": "^16.3.1",
     "llamaindex": "^0.1.0",
+    "prompts": "^2.4.2",
     "simple-git": "^3.20.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/prompts": "^2.4.9",
+    "husky": "^8.0.3",
     "ts-node": "^10.9.1",
-    "typescript": "^5.2.2",
-    "husky": "^8.0.3"
+    "typescript": "^5.2.2"
   },
   "engines": {
     "node": ">=18"

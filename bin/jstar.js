@@ -39,7 +39,12 @@ ${COLORS.bold}USAGE:${COLORS.reset}
 ${COLORS.bold}COMMANDS:${COLORS.reset}
   ${COLORS.green}init${COLORS.reset}      Index the current codebase (build the brain)
   ${COLORS.green}review${COLORS.reset}    Review staged git changes
+  ${COLORS.green}chat${COLORS.reset}      Resume an interactive session from the last review
   ${COLORS.green}setup${COLORS.reset}     Create .env.example and .jstar/ in current directory
+
+${COLORS.bold}OPTIONS:${COLORS.reset}
+  ${COLORS.yellow}--json${COLORS.reset}      Output machine-readable JSON (for CI/CD)
+  ${COLORS.yellow}--headless${COLORS.reset}  Enable stdin/stdout protocol (for AI agents)
 
 ${COLORS.bold}EXAMPLES:${COLORS.reset}
   ${COLORS.dim}# First time setup${COLORS.reset}
@@ -48,6 +53,9 @@ ${COLORS.bold}EXAMPLES:${COLORS.reset}
   ${COLORS.dim}# Review staged changes${COLORS.reset}
   git add .
   jstar review
+
+  ${COLORS.dim}# JSON output for CI${COLORS.reset}
+  jstar review --json > report.json
 
 ${COLORS.bold}ENVIRONMENT:${COLORS.reset}
   GEMINI_API_KEY    Required for Gemini embeddings (or GOOGLE_API_KEY)
@@ -213,6 +221,9 @@ switch (command) {
         break;
     case 'review':
         runScript('reviewer.ts');
+        break;
+    case 'chat':
+        runScript('chat.ts');
         break;
     case 'setup':
         createSetupFiles();

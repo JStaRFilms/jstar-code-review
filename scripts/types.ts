@@ -10,6 +10,8 @@ export interface ReviewIssue {
     description: string;
     line?: number;
     fixPrompt: string;
+    confidenceScore?: number;
+    status?: 'resolved' | 'ignored';
 }
 
 export interface FileFinding {
@@ -35,6 +37,12 @@ export interface DashboardReport {
     recommendedAction: string;
 }
 
+export interface SessionState {
+    date: string;
+    findings: FileFinding[];
+    metrics: DashboardReport['metrics'];
+}
+
 /**
  * Schema for LLM response (per-file review)
  */
@@ -45,6 +53,7 @@ export interface LLMReviewResponse {
         description: string;
         line?: number;
         fixPrompt: string;
+        confidenceScore?: number;  // 1-5 confidence rating
     }[];
 }
 

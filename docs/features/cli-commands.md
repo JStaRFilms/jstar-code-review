@@ -22,6 +22,18 @@ J-Star is designed to be run via `pnpm` scripts or the `jstar` binary.
 
 ---
 
+### `pnpm run chat`
+**Description:** Resume an interactive session from the last review.
+- Loads `.jstar/session.json`.
+- Skips analysis, goes straight to debate menu.
+- Supports `--headless` flag for AI agents.
+
+**When to use:**
+- Continue debating issues from a previous review.
+- Let AI agents interact via stdin/stdout protocol.
+
+---
+
 ### `pnpm run index:init`
 **Description:** Scans the codebase and creates a fresh vector index.
 - **Target:** Auto-detects `src`, `lib`, or uses cwd.
@@ -51,9 +63,32 @@ J-Star is designed to be run via `pnpm` scripts or the `jstar` binary.
 **Description:** Compiles the TypeScript scripts to JavaScript.
 - Uses `tsc`.
 
+---
+
+## CLI Flags
+
+| Flag | Commands | Description |
+|------|----------|-------------|
+| `--json` | `review` | Output JSON to stdout, logs to stderr. Skips interactive session. |
+| `--headless` | `chat` | Enable stdin/stdout JSON protocol for AI agents. |
+
+**Examples:**
+```bash
+# CI/CD: Get JSON report
+jstar review --json > report.json
+
+# AI Agent: Interact via stdin/stdout
+echo '{"action": "list"}' | jstar chat --headless
+```
+
+See [Headless Mode](./headless-mode.md) for full protocol documentation.
+
+---
+
 ## Configuration (`.env.local`)
 
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `GEMINI_API_KEY` | Key for Google Gemini (Embeddings). | ✅ |
 | `GROQ_API_KEY` | Key for Groq (LLM Inference). | ✅ |
+

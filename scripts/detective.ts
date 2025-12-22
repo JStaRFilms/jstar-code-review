@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
+import { Logger } from './utils/logger';
 
 interface Violation {
     file: string;
@@ -109,22 +110,22 @@ export class Detective {
 
     report() {
         if (this.violations.length === 0) {
-            console.log(chalk.green("✅ Detective Engine: No violations found."));
+            Logger.info(chalk.green("✅ Detective Engine: No violations found."));
             return;
         }
 
-        console.log(chalk.red(`🚨 Detective Engine found ${this.violations.length} violations:`));
+        Logger.info(chalk.red(`🚨 Detective Engine found ${this.violations.length} violations:`));
         // Only show first 10 to avoid wall of text
         const total = this.violations.length;
         const toShow = this.violations.slice(0, 10);
 
         toShow.forEach(v => {
             const color = v.severity === 'high' ? chalk.red : chalk.yellow;
-            console.log(color(`[${v.code}] ${v.file}:${v.line} - ${v.message}`));
+            Logger.info(color(`[${v.code}] ${v.file}:${v.line} - ${v.message}`));
         });
 
         if (total > 10) {
-            console.log(chalk.dim(`... and ${total - 10} more.`));
+            Logger.dim(`... and ${total - 10} more.`);
         }
     }
 }

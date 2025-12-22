@@ -55,9 +55,13 @@ const DEFAULT_MODEL = "moonshotai/kimi-k2-instruct-0905";
 
 export const Config = {
     MODEL_NAME: process.env.REVIEW_MODEL_NAME || DEFAULT_MODEL,
+    CRITIQUE_MODEL_NAME: process.env.CRITIQUE_MODEL_NAME || process.env.REVIEW_MODEL_NAME || DEFAULT_MODEL,
     DEFAULT_SEVERITY: 'P2_MEDIUM' as Severity,
     THRESHOLDS: {
         MEDIUM: 5
-    }
+    },
+    // Smart Review Settings
+    CONFIDENCE_THRESHOLD: 3,      // Minimum confidence (1-5) to include an issue
+    ENABLE_SELF_CRITIQUE: true,   // Enable second-pass validation
 };
 

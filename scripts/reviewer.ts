@@ -5,12 +5,15 @@ import * as path from "path";
 import * as fs from "fs";
 import chalk from "chalk";
 import simpleGit from "simple-git";
+import { Logger } from "./utils/logger";
 import { Config } from "./config";
 import { Detective } from "./detective";
 import { GeminiEmbedding } from "./gemini-embedding";
 import { MockLLM } from "./mock-llm";
 import { FileFinding, DashboardReport, LLMReviewResponse, EMPTY_REVIEW } from "./types";
 import { renderDashboard, determineStatus, generateRecommendation } from "./dashboard";
+import { startInteractiveSession } from "./session";
+import { critiqueFindings } from "./core/critique";
 import {
     VectorStoreIndex,
     storageContextFromDefaults,
@@ -66,6 +69,38 @@ function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Filter issues by confidence threshold and log what was removed
+ */
+function filterByConfidence(findings: FileFinding[]): FileFinding[] {
+    const threshold = Config.CONFIDENCE_THRESHOLD;
+    let removedCount = 0;
+
+    const filtered = findings.map(finding => {
+        const validIssues = finding.issues.filter(issue => {
+            const confidence = issue.confidenceScore ?? 5; // Default to high if not specified
+            if (confidence < threshold) {
+                removedCount++;
+                Logger.info(chalk.dim(`   ⚡ Low confidence (${confidence}): "${issue.title}" - filtered out`));
+                return false;
+            }
+            return true;
+        });
+
+        return {
+            ...finding,
+            issues: validIssues,
+            severity: validIssues.length === 0 ? 'LGTM' as const : finding.severity
+        };
+    });
+
+    if (removedCount > 0) {
+        Logger.info(chalk.blue(`\n   📊 Confidence Filter: ${removedCount} low-confidence issue(s) removed\n`));
+    }
+
+    return filtered;
+}
+
 function parseReviewResponse(text: string): LLMReviewResponse {
     try {
         // Try to extract JSON from the response
@@ -108,20 +143,23 @@ function parseReviewResponse(text: string): LLMReviewResponse {
 
 // --- Main ---
 async function main() {
-    console.log(chalk.blue("🕵️  J-Star Reviewer: Analyzing your changes...\n"));
+    // Initialize logger mode based on CLI flags
+    Logger.init();
+
+    Logger.info(chalk.blue("🕵️  J-Star Reviewer: Analyzing your changes...\n"));
 
     // 0. Environment Validation
     if (!geminiKey || !process.env.GROQ_API_KEY) {
-        console.error(chalk.red("❌ Missing API Keys!"));
-        console.log(chalk.yellow("\nPlease ensure you have a .env.local file with:"));
-        console.log(chalk.white("- GEMINI_API_KEY (or GOOGLE_API_KEY)"));
-        console.log(chalk.white("- GROQ_API_KEY"));
-        console.log(chalk.white("\nCheck .env.example for a template.\n"));
+        Logger.error(chalk.red("❌ Missing API Keys!"));
+        Logger.info(chalk.yellow("\nPlease ensure you have a .env.local file with:"));
+        Logger.info(chalk.white("- GEMINI_API_KEY (or GOOGLE_API_KEY)"));
+        Logger.info(chalk.white("- GROQ_API_KEY"));
+        Logger.info(chalk.white("\nCheck .env.example for a template.\n"));
         return;
     }
 
     // 1. Detective
-    console.log(chalk.blue("🔎 Running Detective Engine..."));
+    Logger.info(chalk.blue("🔎 Running Detective Engine..."));
 
     const detective = new Detective(SOURCE_DIR);
     await detective.scan();
@@ -130,13 +168,13 @@ async function main() {
     // 1. Get the Diff
     const diff = await git.diff(["--staged"]);
     if (!diff) {
-        console.log(chalk.green("\n✅ No staged changes to review. (Did you 'git add'?)"));
+        Logger.info(chalk.green("\n✅ No staged changes to review. (Did you 'git add'?)"));
         return;
     }
 
     // 2. Load the Brain
     if (!fs.existsSync(STORAGE_DIR)) {
-        console.error(chalk.red("❌ Local Brain not found. Run 'pnpm run index:init' first."));
+        Logger.error(chalk.red("❌ Local Brain not found. Run 'pnpm run index:init' first."));
         return;
     }
     const storageContext = await storageContextFromDefaults({ persistDir: STORAGE_DIR });
@@ -150,15 +188,15 @@ async function main() {
     const contextNodes = await retriever.retrieve(keywords);
     const relatedContext = contextNodes.map(n => n.node.getContent(MetadataMode.NONE).slice(0, 1500)).join("\n");
 
-    console.log(chalk.yellow(`\n🧠 Found ${contextNodes.length} context chunk.`));
+    Logger.info(chalk.yellow(`\n🧠 Found ${contextNodes.length} context chunk.`));
 
     // 4. Chunk the Diff
     const fileChunks = chunkDiffByFile(diff);
     const totalTokens = estimateTokens(diff);
-    console.log(chalk.dim(`   Total diff: ~${totalTokens} tokens across ${fileChunks.length} files.`));
+    Logger.info(chalk.dim(`   Total diff: ~${totalTokens} tokens across ${fileChunks.length} files.`));
 
-    // 5. Structured JSON Prompt
-    const systemPrompt = `You are J-Star, a Senior Code Reviewer. Be direct and professional.
+    // 5. Structured JSON Prompt (Conservative)
+    const systemPrompt = `You are J-Star, a Senior Code Reviewer. Be CONSERVATIVE and PRECISE.
 
 Analyze the Git Diff and return a JSON response with this EXACT structure:
 {
@@ -168,7 +206,8 @@ Analyze the Git Diff and return a JSON response with this EXACT structure:
       "title": "Short issue title",
       "description": "Detailed description of the problem",
       "line": 42,
-      "fixPrompt": "A specific prompt an AI can use to fix this issue"
+      "fixPrompt": "A specific prompt an AI can use to fix this issue",
+      "confidenceScore": 5
     }
   ]
 }
@@ -179,10 +218,20 @@ SEVERITY GUIDE:
 - P2_MEDIUM: Code quality, missing types, cleanup needed
 - LGTM: No issues found (return empty issues array)
 
-IMPORTANT: 
-- Return ONLY valid JSON, no markdown or explanation
-- Each issue MUST have a fixPrompt that explains exactly how to fix it
-- If the file is clean, return {"severity": "LGTM", "issues": []}
+CONFIDENCE SCORE (1-5) - BE HONEST:
+- 5: Absolutely certain. The bug is obvious in the diff.
+- 4: Very likely. Clear code smell or anti-pattern.
+- 3: Probable issue, might be missing context.
+- 2: Unsure, could be intentional.
+- 1: Speculation, likely false positive.
+
+CRITICAL RULES:
+1. Only flag issues you are HIGHLY confident about (4-5).
+2. Test mocks, stubs, and intentional patterns are NOT bugs.
+3. If the code looks intentional or well-handled, it's probably fine.
+4. When in doubt, lean towards LGTM.
+5. Return ONLY valid JSON, no markdown.
+6. If the file is clean: {"severity": "LGTM", "issues": []}
 
 Context: ${relatedContext.slice(0, 800)}`;
 
@@ -190,7 +239,7 @@ Context: ${relatedContext.slice(0, 800)}`;
     let chunkIndex = 0;
     let skippedCount = 0;
 
-    console.log(chalk.blue("\n⚖️  Sending to Judge...\n"));
+    Logger.info(chalk.blue("\n⚖️  Sending to Judge...\n"));
 
     for (const chunk of fileChunks) {
         chunkIndex++;
@@ -198,7 +247,7 @@ Context: ${relatedContext.slice(0, 800)}`;
 
         // Skip excluded files
         if (shouldSkipFile(fileName)) {
-            console.log(chalk.dim(`   ⏭️  Skipping ${fileName} (excluded)`));
+            Logger.info(chalk.dim(`   ⏭️  Skipping ${fileName} (excluded)`));
             skippedCount++;
             continue;
         }
@@ -207,7 +256,7 @@ Context: ${relatedContext.slice(0, 800)}`;
 
         // Skip huge files
         if (chunkTokens > MAX_TOKENS_PER_REQUEST) {
-            console.log(chalk.yellow(`   ⚠️  Skipping ${fileName} (too large: ~${chunkTokens} tokens)`));
+            Logger.info(chalk.yellow(`   ⚠️  Skipping ${fileName} (too large: ~${chunkTokens} tokens)`));
             findings.push({
                 file: fileName,
                 severity: Config.DEFAULT_SEVERITY,
@@ -220,7 +269,7 @@ Context: ${relatedContext.slice(0, 800)}`;
             continue;
         }
 
-        process.stdout.write(chalk.dim(`   📄 ${fileName}...`));
+        Logger.progress(chalk.dim(`   📄 ${fileName}...`));
 
         try {
             const { text } = await generateText({
@@ -240,10 +289,10 @@ Context: ${relatedContext.slice(0, 800)}`;
             const emoji = response.severity === 'LGTM' ? '✅' :
                 response.severity === 'P0_CRITICAL' ? '🛑' :
                     response.severity === 'P1_HIGH' ? '⚠️' : '📝';
-            console.log(` ${emoji}`);
+            Logger.info(` ${emoji}`);
 
         } catch (error: any) {
-            console.log(chalk.red(` ❌ (${error.message.slice(0, 50)})`));
+            Logger.info(chalk.red(` ❌ (${error.message.slice(0, 50)})`));
             findings.push({
                 file: fileName,
                 severity: Config.DEFAULT_SEVERITY,
@@ -261,15 +310,24 @@ Context: ${relatedContext.slice(0, 800)}`;
         }
     }
 
-    // 6. Build Dashboard Report
+    // 6. Confidence Filtering
+    Logger.info(chalk.blue("\n🎯 Filtering by Confidence...\n"));
+    let filteredFindings = filterByConfidence(findings);
+
+    // 7. Self-Critique Pass (if enabled)
+    if (Config.ENABLE_SELF_CRITIQUE) {
+        filteredFindings = await critiqueFindings(filteredFindings, diff);
+    }
+
+    // 8. Build Dashboard Report
     const metrics = {
         filesScanned: fileChunks.length - skippedCount,
         totalTokens,
-        violations: findings.reduce((sum, f) => sum + f.issues.length, 0),
-        critical: findings.filter(f => f.severity === 'P0_CRITICAL').length,
-        high: findings.filter(f => f.severity === 'P1_HIGH').length,
-        medium: findings.filter(f => f.severity === 'P2_MEDIUM').length,
-        lgtm: findings.filter(f => f.severity === 'LGTM').length,
+        violations: filteredFindings.reduce((sum, f) => sum + f.issues.length, 0),
+        critical: filteredFindings.filter(f => f.severity === 'P0_CRITICAL').length,
+        high: filteredFindings.filter(f => f.severity === 'P1_HIGH').length,
+        medium: filteredFindings.filter(f => f.severity === 'P2_MEDIUM').length,
+        lgtm: filteredFindings.filter(f => f.severity === 'LGTM').length,
     };
 
     const report: DashboardReport = {
@@ -277,7 +335,7 @@ Context: ${relatedContext.slice(0, 800)}`;
         reviewer: 'Detective Engine & Judge',
         status: determineStatus(metrics),
         metrics,
-        findings,
+        findings: filteredFindings,
         recommendedAction: generateRecommendation(metrics)
     };
 
@@ -288,20 +346,72 @@ Context: ${relatedContext.slice(0, 800)}`;
     fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true });
     fs.writeFileSync(OUTPUT_FILE, dashboard);
 
-    console.log("\n" + chalk.bold.green("📊 DASHBOARD GENERATED"));
-    console.log(chalk.dim(`   Saved to: ${OUTPUT_FILE}`));
-    console.log("\n" + chalk.bold.white("─".repeat(50)));
+    // Save Session State for "jstar chat"
+    const SESSION_FILE = path.join(process.cwd(), ".jstar", "session.json");
+    fs.writeFileSync(SESSION_FILE, JSON.stringify({
+        date: report.date,
+        findings: report.findings,
+        metrics: report.metrics
+    }, null, 2));
+
+    Logger.info("\n" + chalk.bold.green("📊 DASHBOARD GENERATED"));
+    Logger.info(chalk.dim(`   Saved to: ${OUTPUT_FILE}`));
+    Logger.info("\n" + chalk.bold.white("─".repeat(50)));
 
     // Print summary to console
     const statusEmoji = report.status === 'APPROVED' ? '🟢' :
         report.status === 'NEEDS_REVIEW' ? '🟡' : '🔴';
-    console.log(`\n${statusEmoji} Status: ${report.status.replace('_', ' ')}`);
-    console.log(`   🛑 Critical: ${metrics.critical}`);
-    console.log(`   ⚠️  High: ${metrics.high}`);
-    console.log(`   📝 Medium: ${metrics.medium}`);
-    console.log(`   ✅ LGTM: ${metrics.lgtm}`);
-    console.log(`\n💡 ${report.recommendedAction}`);
-    console.log(chalk.dim(`\n📄 Full report: ${OUTPUT_FILE}`));
+    Logger.info(`\n${statusEmoji} Status: ${report.status.replace('_', ' ')}`);
+    Logger.info(`   🛑 Critical: ${metrics.critical}`);
+    Logger.info(`   ⚠️  High: ${metrics.high}`);
+    Logger.info(`   📝 Medium: ${metrics.medium}`);
+    Logger.info(`   ✅ LGTM: ${metrics.lgtm}`);
+    Logger.info(`\n💡 ${report.recommendedAction}`);
+    Logger.info(chalk.dim(`\n📄 Full report: ${OUTPUT_FILE}`));
+
+    // 8. Interactive Session OR JSON Output
+    if (Logger.isHeadless()) {
+        // In JSON mode: output report to stdout and skip interactive session
+        Logger.json(report);
+    } else {
+        // Normal TUI mode: start interactive session
+        const { updatedFindings, hasUpdates } = await startInteractiveSession(findings, index);
+
+        if (hasUpdates) {
+            Logger.info(chalk.blue("\n🔄 Updating Dashboard with session changes..."));
+
+            // Recalculate metrics
+            const newMetrics = {
+                filesScanned: fileChunks.length - skippedCount,
+                totalTokens,
+                violations: updatedFindings.reduce((sum, f) => sum + f.issues.length, 0),
+                critical: updatedFindings.filter(f => f.severity === 'P0_CRITICAL').length,
+                high: updatedFindings.filter(f => f.severity === 'P1_HIGH').length,
+                medium: updatedFindings.filter(f => f.severity === 'P2_MEDIUM').length,
+                lgtm: updatedFindings.filter(f => f.severity === 'LGTM').length,
+            };
+
+            const newReport: DashboardReport = {
+                ...report, // Keep date/reviewer
+                metrics: newMetrics,
+                findings: updatedFindings,
+                status: determineStatus(newMetrics),
+                recommendedAction: generateRecommendation(newMetrics)
+            };
+
+            const newDashboard = renderDashboard(newReport);
+            fs.writeFileSync(OUTPUT_FILE, newDashboard);
+
+            // Also update session file with new findings
+            fs.writeFileSync(SESSION_FILE, JSON.stringify({
+                date: newReport.date,
+                findings: newReport.findings,
+                metrics: newReport.metrics
+            }, null, 2));
+
+            Logger.info(chalk.bold.green("📊 DASHBOARD UPDATED"));
+        }
+    }
 }
 
 main().catch(console.error);
