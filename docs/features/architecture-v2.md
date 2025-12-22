@@ -96,7 +96,7 @@ Mock LLM to satisfy LlamaIndex dependencies during indexing (no actual LLM neede
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GOOGLE_API_KEY` | ✅ | For Gemini embeddings |
+| `GEMINI_API_KEY` | ✅ | For Gemini embeddings (or `GOOGLE_API_KEY`) |
 | `GROQ_API_KEY` | ✅ | For Groq LLM reviews |
 
 ---

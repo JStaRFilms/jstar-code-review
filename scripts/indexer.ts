@@ -50,8 +50,9 @@ function getSourceDir(): string {
 
 async function main() {
     // 0. Environment Validation
-    if (!process.env.GOOGLE_API_KEY) {
-        console.error(chalk.red("❌ Missing GOOGLE_API_KEY!"));
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    if (!geminiKey) {
+        console.error(chalk.red("❌ Missing GEMINI_API_KEY (or GOOGLE_API_KEY)!"));
         console.log(chalk.yellow("\nPlease ensure you have a .env.local file. Check .env.example for a template.\n"));
         process.exit(1);
     }
@@ -126,7 +127,7 @@ async function main() {
     } catch (e: any) {
         console.error(chalk.red("❌ Indexing Failed:"), e.message);
         if (e.message.includes("API") || e.message.includes("key")) {
-            console.log(chalk.yellow("👉 Tip: Make sure you have GOOGLE_API_KEY in your .env.local file."));
+            console.log(chalk.yellow("👉 Tip: Make sure you have GEMINI_API_KEY in your .env.local file."));
         }
         process.exit(1);
     }

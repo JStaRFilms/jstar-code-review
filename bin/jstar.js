@@ -50,7 +50,7 @@ ${COLORS.bold}EXAMPLES:${COLORS.reset}
   jstar review
 
 ${COLORS.bold}ENVIRONMENT:${COLORS.reset}
-  GOOGLE_API_KEY    Required for Gemini embeddings
+  GEMINI_API_KEY    Required for Gemini embeddings (or GOOGLE_API_KEY)
   GROQ_API_KEY      Required for Groq LLM reviews
 
 ${COLORS.dim}Report issues: https://github.com/JStaRFilms/jstar-code-review${COLORS.reset}
@@ -135,7 +135,7 @@ function runScript(scriptName) {
 }
 
 const REQUIRED_ENV_VARS = {
-    'GOOGLE_API_KEY': '# Required: Google API key for Gemini embeddings\nGOOGLE_API_KEY=your_google_api_key_here',
+    'GEMINI_API_KEY': '# Required: Gemini API key (or GOOGLE_API_KEY)\nGEMINI_API_KEY=your_gemini_api_key_here',
     'GROQ_API_KEY': '# Required: Groq API key for LLM reviews\nGROQ_API_KEY=your_groq_api_key_here',
     'REVIEW_MODEL_NAME': '# Optional: Override the default model\n# REVIEW_MODEL_NAME=moonshotai/kimi-k2-instruct-0905'
 };

@@ -18,7 +18,8 @@ import {
     serviceContextFromDefaults
 } from "llamaindex";
 
-const google = createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY });
+const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+const google = createGoogleGenerativeAI({ apiKey: geminiKey });
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY });
 
 const embedModel = new GeminiEmbedding();
@@ -110,10 +111,10 @@ async function main() {
     console.log(chalk.blue("🕵️  J-Star Reviewer: Analyzing your changes...\n"));
 
     // 0. Environment Validation
-    if (!process.env.GOOGLE_API_KEY || !process.env.GROQ_API_KEY) {
+    if (!geminiKey || !process.env.GROQ_API_KEY) {
         console.error(chalk.red("❌ Missing API Keys!"));
         console.log(chalk.yellow("\nPlease ensure you have a .env.local file with:"));
-        console.log(chalk.white("- GOOGLE_API_KEY"));
+        console.log(chalk.white("- GEMINI_API_KEY (or GOOGLE_API_KEY)"));
         console.log(chalk.white("- GROQ_API_KEY"));
         console.log(chalk.white("\nCheck .env.example for a template.\n"));
         return;

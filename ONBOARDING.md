@@ -12,7 +12,7 @@ The tool now **auto-creates** these for you when you run any command, but you st
 
 1.  Look for `.env.example` (or create a copy named `.env.local`).
 2.  Add your API keys:
-    - `GOOGLE_API_KEY`: Get one for free at [Google AI Studio](https://aistudio.google.com/).
+    - `GEMINI_API_KEY`: Get one for free at [Google AI Studio](https://aistudio.google.com/).
     - `GROQ_API_KEY`: Get one at [Groq Console](https://console.groq.com/).
 
 ## 3. Build the Brain (One-Time Setup)

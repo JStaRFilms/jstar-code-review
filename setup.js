@@ -67,8 +67,8 @@ const SCRIPTS = {
 const ENV_EXAMPLE = `# J-Star Code Reviewer Configuration
 # Copy this to .env.local and fill in your keys
 
-# Required: Google API key for Gemini embeddings
-GOOGLE_API_KEY=your_google_api_key_here
+# Required: Gemini API key (or GOOGLE_API_KEY)
+GEMINI_API_KEY=your_gemini_api_key_here
 
 # Required: Groq API key for LLM reviews
 GROQ_API_KEY=your_groq_api_key_here
@@ -115,7 +115,7 @@ async function main() {
 
     // HARDCODED: Tagged release URL - NOT configurable for security
     // To update, modify this constant and publish a new version of setup.js
-    const BASE_URL = 'https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/v2.1.3';
+    const BASE_URL = 'https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/v2.1.4';
 
     // Validate URL matches our exact expected pattern (defense in depth)
     function isValidUrl(url) {
@@ -272,7 +272,7 @@ async function main() {
     // 6. Update .env.example (intelligently merge, don't override)
     const envExamplePath = path.join(cwd, '.env.example');
     const REQUIRED_ENV_VARS = {
-        'GOOGLE_API_KEY': '# Required: Google API key for Gemini embeddings\nGOOGLE_API_KEY=your_google_api_key_here',
+        'GEMINI_API_KEY': '# Required: Gemini API key (or GOOGLE_API_KEY)\nGEMINI_API_KEY=your_gemini_api_key_here',
         'GROQ_API_KEY': '# Required: Groq API key for LLM reviews\nGROQ_API_KEY=your_groq_api_key_here',
         'REVIEW_MODEL_NAME': '# Optional: Override the default model\n# REVIEW_MODEL_NAME=moonshotai/kimi-k2-instruct-0905'
     };
@@ -355,7 +355,7 @@ async function main() {
     console.log('\n🎉 J-Star Code Reviewer installed!\n');
     console.log('Next steps:');
     console.log('  1. Copy .env.example to .env.local');
-    console.log('  2. Add your GOOGLE_API_KEY and GROQ_API_KEY');
+    console.log('  2. Add your GEMINI_API_KEY and GROQ_API_KEY');
     console.log('  3. Run: pnpm run index:init');
     console.log('  4. Stage changes and run: pnpm run review');
     console.log('\n' + '─'.repeat(50) + '\n');

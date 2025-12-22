@@ -37,7 +37,7 @@ cp .env.example .env.local
 
 Edit `.env.local` and add your API keys:
 ```env
-GOOGLE_API_KEY=your_google_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 GROQ_API_KEY=your_groq_api_key_here
 ```
 

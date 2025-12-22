@@ -19,7 +19,7 @@ Improve the "Day 0" experience for developers by automatically handling trivial 
 ### 2. Auto-Healing Config (`scripts/config.ts`)
 - **Environment Parity**: Every time `Config` is loaded, it will verify `.env.example` exists and has all required keys.
 - **Directory Persistence**: Ensure `.jstar/` exists.
-- **Validation**: Check for `GOOGLE_API_KEY` and `GROQ_API_KEY`. If missing, print a friendly warning with instructions instead of an ugly stack trace.
+- **Validation**: Check for `GEMINI_API_KEY` and `GROQ_API_KEY`. If missing, print a friendly warning with instructions instead of an ugly stack trace.
 
 ### 3. CLI Intelligence (`bin/jstar.js`)
 - If `jstar review` is run and `.jstar` or `.env.local` is missing, proactively offer to run the setup logic.

@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/JStaRFilms/jstar-code-review/v2.0.0
 ### After Install:
 
 1.  **Check Config**: The tool now **auto-creates** `.env.example` and `.jstar/` when you run it.
-2.  **Add Keys**: Copy `.env.example` → `.env.local` and add your `GOOGLE_API_KEY` and `GROQ_API_KEY`.
+2.  **Add Keys**: Copy `.env.example` → `.env.local` and add your `GEMINI_API_KEY` and `GROQ_API_KEY`.
 3.  **Index**: Run `jstar init` (or `pnpm run index:init`) to build the brain.
 4.  **Review**: Stage changes (`git add`) and run `jstar review` (or `pnpm run review`).
 
@@ -91,7 +91,7 @@ pnpm install
 Create `.env.local`:
 
 ```env
-GOOGLE_API_KEY=your_gemini_key
+GEMINI_API_KEY=your_gemini_key
 GROQ_API_KEY=your_groq_key
 ```
 
