@@ -11,10 +11,10 @@ Works with **any programming language** — TypeScript, Python, Rust, Go, etc.
 
 ## Steps
 
-### 1. Install the CLI Globally (One Time)
+### 1. Install the CLI Globally (One Time) use pnpm by default else revert to npm
 // turbo
 ```bash
-npm install -g jstar-reviewer
+pnpm install -g jstar-reviewer
 ```
 
 ### 2. Run your First Command
@@ -69,12 +69,32 @@ Create `.jstar/rules.md` with your project-specific coding guidelines:
 - Validate all user inputs
 ```
 
-### 6. Run Your First Review
-Stage some changes and run:
+### 6. Understanding Review Modes
+Before running a review, understand the available modes:
+
+| Mode | Command | Best For |
+| :--- | :--- | :--- |
+| **Standard** | `jstar review` | checking staged changes *before* committing. |
+| **Retroactive** | `jstar review --last` | checking the *last commit* (if you forgot to review). |
+| **Pull Request** | `jstar review --pr` | checking an entire feature branch against `main`. |
+
+### 7. Run Your First Review
+
+**Agent Instruction:** Ask the user: *"Would you like to run the review yourself, or should I run a headless check for you?"*
+
+#### Option A: User Runs It (Recommended)
+The user runs the interactive TUI command in their terminal:
 ```bash
-git add <files>
 jstar review
 ```
+
+#### Option B: Agent Runs It (Headless)
+If the user asks YOU to do it, use the headless flag to avoid hanging:
+// turbo
+```bash
+jstar review --headless
+```
+*(This outputs JSON-formatted results that you can parse)*
 
 The dashboard will be saved to `.jstar/last-review.md`.
 
@@ -85,7 +105,9 @@ The dashboard will be saved to `.jstar/last-review.md`.
 |---------|-------------|
 | `jstar setup` | Create config files in current project |
 | `jstar init` | Index codebase (after major changes) |
-| `jstar review` | Review staged changes |
+| `jstar review` | Review staged changes (Default) |
+| `jstar review --last` | Review last commit (Retroactive) |
+| `jstar review --pr` | Review branch against main (PR Mode) |
 
 **Output:**
 - Console: Quick summary with severity counts

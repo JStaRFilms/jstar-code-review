@@ -22,9 +22,26 @@ git add .
 
 ## 3. Run Reviewer
 Execute the review pipeline.
+
+### Standard Review (Staged Changes)
 ```bash
 jstar review
 ```
+*Use this when changes are staged but not yet committed.*
+
+### Retroactive Review (Oops Mode)
+If you already committed changes but forgot to review:
+```bash
+jstar review --last
+```
+*Equivalent to checking the last commit `HEAD~1..HEAD`.*
+
+### Branch/PR Review
+If working on a feature branch, check against main:
+```bash
+jstar review --pr
+```
+*Equivalent to `git diff main...HEAD`. Use this for full feature verification.*
 
 ## 4. Analyze and Fix
 **Agent Instructions:**
@@ -40,6 +57,41 @@ jstar review
         - You may fix them if they are quick/obvious.
         - Otherwise, consider the code "Good Enough" and stop.
     - **MAX LOOPS**: 3. Do not run this cycle more than 3 times. If issues persist, stop and ask the user.
+
+## 5. Handling False Positives (Debate Mode)
+
+If the reviewer flags correct code as an issue (e.g., security false positives), use **Headless Chat** to resolve it.
+
+**Protocol:**
+1. **Start Session:**
+   Use the `run_command` tool to start the background process:
+   ```bash
+   jstar chat --headless
+   ```
+   *Note: Capture the `CommandId` returned by this tool.*
+
+2. **List Issues (Get IDs):**
+   Use `send_command_input` with the `CommandId`:
+   ```json
+   {"action": "list"}
+   ```
+   *Wait for output. Identify the numeric `id` of the issue you want to challenge.*
+
+3. **Debate:**
+   Use `send_command_input` to explain why it's a false positive:
+   ```json
+   {"action": "debate", "issueId": 0, "argument": "This is correct because..."}
+   ```
+   *Use the integer `id` from step 2.*
+
+4. **Verify Result:**
+   Check the output for `"status": "resolved"` and `"verdict": "LGTM"`.
+
+5. **Exit:**
+   Terminate the session cleanly:
+   ```json
+   {"action": "exit"}
+   ```
 
 ---
 
@@ -79,4 +131,3 @@ See [Headless Mode Docs](../docs/features/headless-mode.md) for full protocol.
 5. jstar review --json  →  Verify fixes
 6. Repeat until P0/P1 = 0
 ```
-

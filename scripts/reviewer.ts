@@ -165,12 +165,60 @@ async function main() {
     await detective.scan();
     detective.report();
 
-    // 1. Get the Diff
-    const diff = await git.diff(["--staged"]);
+    // 1. Determine Diff Target
+    const args = process.argv.slice(2);
+    let diff: string;
+    let reviewTarget = "Staged Changes";
+
+    if (args.includes('--last')) {
+        reviewTarget = "Last Commit";
+        diff = await git.diff(["HEAD~1", "HEAD"]);
+    } else if (args.includes('--commit')) {
+        const hashIndex = args.indexOf('--commit') + 1;
+        if (hashIndex < args.length) {
+            const hash = args[hashIndex];
+            reviewTarget = `Commit ${hash}`;
+            diff = await git.diff([`${hash}~1`, `${hash}`]);
+        } else {
+            Logger.error(chalk.red("❌ Missing commit hash for --commit"));
+            return;
+        }
+    } else if (args.includes('--range')) {
+        const rangeIndex = args.indexOf('--range') + 1;
+        if (rangeIndex + 1 < args.length) {
+            const start = args[rangeIndex];
+            const end = args[rangeIndex + 1];
+            reviewTarget = `Range ${start}..${end}`;
+            diff = await git.diff([start, end]);
+        } else {
+            Logger.error(chalk.red("❌ Missing arguments for --range (usage: --range <start> <end>)"));
+            return;
+        }
+    } else if (args.includes('--pr')) {
+        const prIndex = args.indexOf('--pr');
+        // Check if there is a next argument that doesn't start with --
+        const potentialBase = args[prIndex + 1];
+        const baseBranch = (potentialBase && !potentialBase.startsWith('--')) ? potentialBase : 'main';
+
+        reviewTarget = `PR (HEAD vs ${baseBranch})`;
+        // Use triple-dot for merge-base difference (what a PR shows)
+        diff = await git.diff([`${baseBranch}...HEAD`]);
+    } else {
+        // Default: Staged changes
+        diff = await git.diff(["--staged"]);
+    }
+
     if (!diff) {
-        Logger.info(chalk.green("\n✅ No staged changes to review. (Did you 'git add'?)"));
+        if (reviewTarget === "Staged Changes") {
+            Logger.info(chalk.green("\n✅ No staged changes to review. (Did you 'git add'?)"));
+            Logger.info(chalk.dim("   Tip: Use '--last' to review the previous commit."));
+        } else {
+            Logger.info(chalk.green(`\n✅ No changes found in ${reviewTarget}.`));
+        }
         return;
     }
+
+    Logger.info(chalk.blue(`\n📝 Reviewing: ${reviewTarget}`));
 
     // 2. Load the Brain
     if (!fs.existsSync(STORAGE_DIR)) {
