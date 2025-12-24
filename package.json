@@ -1,6 +1,6 @@
 {
   "name": "jstar-reviewer",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Local-First, Context-Aware AI Code Reviewer - Works with any language",
   "bin": {
     "jstar": "bin/jstar.js"
