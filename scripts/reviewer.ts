@@ -69,6 +69,30 @@ function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function getDefaultBranch(): Promise<string> {
+    try {
+        // Method 1: Check remote HEAD (most reliable)
+        try {
+            const remote = await git.remote(['show', 'origin']);
+            if (typeof remote === 'string') {
+                const match = remote.match(/HEAD branch: (\S+)/);
+                if (match) return match[1];
+            }
+        } catch (e) {
+            // No remote or network issue, proceed to local check
+        }
+
+        // Method 2: Check which common branch exists locally
+        const branches = await git.branchLocal();
+        if (branches.all.includes('main')) return 'main';
+        if (branches.all.includes('master')) return 'master';
+
+    } catch (e) {
+        // Fallback
+    }
+    return 'main';
+}
+
 /**
  * Filter issues by confidence threshold and log what was removed
  */
@@ -196,13 +220,36 @@ async function main() {
         }
     } else if (args.includes('--pr')) {
         const prIndex = args.indexOf('--pr');
-        // Check if there is a next argument that doesn't start with --
-        const potentialBase = args[prIndex + 1];
-        const baseBranch = (potentialBase && !potentialBase.startsWith('--')) ? potentialBase : 'main';
+        // Check for --base flag first
+        let baseBranch = 'main';
+
+        if (args.includes('--base')) {
+            const baseIndex = args.indexOf('--base') + 1;
+            if (baseIndex < args.length) {
+                baseBranch = args[baseIndex];
+            } else {
+                Logger.error(chalk.red("❌ Missing branch name for --base"));
+                return;
+            }
+        } else {
+            // Check positional argument (backward compatibility)
+            const potentialBase = args[prIndex + 1];
+            if (potentialBase && !potentialBase.startsWith('--')) {
+                baseBranch = potentialBase;
+            } else {
+                // Auto-detect
+                baseBranch = await getDefaultBranch();
+            }
+        }
 
         reviewTarget = `PR (HEAD vs ${baseBranch})`;
         // Use triple-dot for merge-base difference (what a PR shows)
-        diff = await git.diff([`${baseBranch}...HEAD`]);
+        try {
+            diff = await git.diff([`${baseBranch}...HEAD`]);
+        } catch (e) {
+            Logger.error(chalk.red(`❌ Failed to diff against ${baseBranch}. Does the branch exist?`));
+            return;
+        }
     } else {
         // Default: Staged changes
         diff = await git.diff(["--staged"]);
