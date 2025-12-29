@@ -27,7 +27,11 @@ async function loadSession(): Promise<SessionState | null> {
         return JSON.parse(content);
     } catch (e: any) {
         if (e.code === 'ENOENT') {
-            return null; // File doesn't exist
+            return null; // File doesn't exist, start fresh
+        }
+        if (e instanceof SyntaxError) {
+            Logger.warn(chalk.yellow("⚠️  Session file corrupted. Starting fresh."));
+            return null;
         }
         Logger.error(`Failed to load session: ${e.message}`);
         return null;

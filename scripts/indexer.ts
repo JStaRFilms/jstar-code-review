@@ -9,6 +9,7 @@ import { MockLLM } from "./mock-llm";
 import * as path from "path";
 import * as fs from "fs";
 import chalk from "chalk";
+import { Logger } from "./utils/logger";
 // IMPORTANT: Import config for side effects (loads dotenv from cwd)
 import "./config";
 
@@ -27,7 +28,7 @@ function getSourceDir(): string {
         if (fs.existsSync(customPath)) {
             return customPath;
         }
-        console.error(chalk.red(`❌ Custom path not found: ${customPath}`));
+        Logger.error(`❌ Custom path not found: ${customPath}`);
         process.exit(1);
     }
 
@@ -49,11 +50,13 @@ function getSourceDir(): string {
 }
 
 async function main() {
+    Logger.init(); // Initialize Logger (auto-detects modes)
+
     // 0. Environment Validation
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     if (!geminiKey) {
-        console.error(chalk.red("❌ Missing GEMINI_API_KEY (or GOOGLE_API_KEY)!"));
-        console.log(chalk.yellow("\nPlease ensure you have a .env.local file. Check .env.example for a template.\n"));
+        Logger.error("❌ Missing GEMINI_API_KEY (or GOOGLE_API_KEY)!");
+        Logger.warn("\nPlease ensure you have a .env.local file. Check .env.example for a template.\n");
         process.exit(1);
     }
 
@@ -61,25 +64,48 @@ async function main() {
     const isWatch = args.includes("--watch");
     const SOURCE_DIR = getSourceDir();
 
-    console.log(chalk.blue("🧠 J-Star Indexer: Scanning codebase..."));
-    console.log(chalk.dim(`   Source: ${SOURCE_DIR}`));
+    Logger.info(chalk.blue("🧠 J-Star Indexer: Scanning codebase..."));
+    Logger.dim(`   Source: ${SOURCE_DIR}`);
 
     // 1. Load documents (Your Code)
     if (!fs.existsSync(SOURCE_DIR)) {
-        console.error(chalk.red(`❌ Source directory not found: ${SOURCE_DIR}`));
+        Logger.error(`❌ Source directory not found: ${SOURCE_DIR}`);
         process.exit(1);
     }
 
     const reader = new SimpleDirectoryReader();
     const documents = await reader.loadData({ directoryPath: SOURCE_DIR });
 
-    console.log(chalk.yellow(`📄 Found ${documents.length} files to index.`));
+    // --- SECURITY FILTER ---
+    // Exclude sensitive files (like .env) and build artifacts
+    const EXCLUDED_PATTERNS = [
+        /pnpm-lock\.yaml/,
+        /package-lock\.json/,
+        /yarn\.lock/,
+        /\.env/,
+        /\.DS_Store/,
+        /node_modules/,
+        /\.git/,
+        /\.jstar/,
+        /\.json$/, // Prefer code over JSON data for context unless docs
+    ];
+
+    const filteredDocuments = documents.filter(doc => {
+        const filePath = (doc.metadata as any)?.file_path || (doc as any).id_ || '';
+
+        // Check strict exclusions
+        const isExcluded = EXCLUDED_PATTERNS.some(pattern => pattern.test(filePath));
+
+        return !isExcluded;
+    });
+
+    Logger.info(chalk.yellow(`📄 Found ${documents.length} files. Indexing ${filteredDocuments.length} valid files (filtered ${documents.length - filteredDocuments.length} excluded).`));
+
 
     const isInit = args.includes("--init");
 
     try {
         // 2. Setup Service Context with Google Gemini Embeddings
-        // using 'models/text-embedding-004' which is a strong, recent model
         const embedModel = new GeminiEmbedding();
         const llm = new MockLLM();
         const serviceContext = serviceContextFromDefaults({
@@ -90,12 +116,12 @@ async function main() {
         // 3. Create the Storage Context
         let storageContext;
         if (isInit) {
-            console.log(chalk.blue("✨ Initializing fresh Local Brain..."));
+            Logger.info(chalk.blue("✨ Initializing fresh Local Brain..."));
             storageContext = await storageContextFromDefaults({});
         } else {
             // Try to load
             if (!fs.existsSync(STORAGE_DIR)) {
-                console.log(chalk.yellow("⚠️  Storage not found. Running fresh init..."));
+                Logger.warn("⚠️  Storage not found. Running fresh init...");
                 storageContext = await storageContextFromDefaults({});
             } else {
                 storageContext = await storageContextFromDefaults({
@@ -105,32 +131,31 @@ async function main() {
         }
 
         // 4. Generate the Index
-        const index = await VectorStoreIndex.fromDocuments(documents, {
+        const index = await VectorStoreIndex.fromDocuments(filteredDocuments, {
             storageContext,
             serviceContext,
         });
 
         // 4. Persist (Save the Brain)
-        // Manual persistence for LlamaIndex TS compatibility
         const ctxToPersist: any = index.storageContext;
         if (ctxToPersist.docStore) await ctxToPersist.docStore.persist(path.join(STORAGE_DIR, "doc_store.json"));
         if (ctxToPersist.vectorStore) await ctxToPersist.vectorStore.persist(path.join(STORAGE_DIR, "vector_store.json"));
         if (ctxToPersist.indexStore) await ctxToPersist.indexStore.persist(path.join(STORAGE_DIR, "index_store.json"));
         if (ctxToPersist.propStore) await ctxToPersist.propStore.persist(path.join(STORAGE_DIR, "property_store.json"));
 
-        console.log(chalk.green("✅ Indexing Complete. Brain is updated."));
+        Logger.success("✅ Indexing Complete. Brain is updated.");
 
         if (isWatch) {
-            console.log(chalk.blue("👀 Watch mode enabled."));
+            Logger.info(chalk.blue("👀 Watch mode enabled."));
         }
 
     } catch (e: any) {
-        console.error(chalk.red("❌ Indexing Failed:"), e.message);
+        Logger.error("❌ Indexing Failed: " + e.message);
         if (e.message.includes("API") || e.message.includes("key")) {
-            console.log(chalk.yellow("👉 Tip: Make sure you have GEMINI_API_KEY in your .env.local file."));
+            Logger.warn("👉 Tip: Make sure you have GEMINI_API_KEY in your .env.local file.");
         }
         process.exit(1);
     }
 }
 
-main().catch(console.error);
+main().catch(err => Logger.error(err));

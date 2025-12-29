@@ -17,6 +17,7 @@ interface Rule {
     message: string;
     pattern: RegExp;
     filePattern?: RegExp; // Only check files matching this pattern
+    excludePattern?: RegExp; // Exclude files matching this pattern
 }
 
 const RULES: Rule[] = [
@@ -30,7 +31,8 @@ const RULES: Rule[] = [
         id: 'ARCH-001',
         severity: 'medium',
         message: 'Avoid using console.log in production code',
-        pattern: /console\.log\(/
+        pattern: /console\.log\(/,
+        excludePattern: /(bin[\\/]jstar\.js|scripts[\\/]utils[\\/]logger\.ts|setup\.js|test[\\/])/
     },
 ];
 
@@ -39,9 +41,10 @@ const FILE_RULES: Rule[] = [
     {
         id: 'ARCH-002',
         severity: 'high',
-        message: 'Next.js "use client" must be at the very top of the file',
-        pattern: /^(?!['"]use client['"]).*['"]use client['"]/s,
-        filePattern: /\.tsx?$/
+        message: 'Next.js "use client" must be at the very top of the file (before imports)',
+        pattern: /^(?!(?:\s*|(?:\/\/[^\n]*\n)|(?:\/\*[\s\S]*?\*\/))*['"]use client['"]).*['"]use client['"]/s,
+        filePattern: /\.tsx?$/,
+        excludePattern: /(scripts|test)[\\/]/
     }
 ];
 
@@ -63,9 +66,11 @@ export class Detective {
             const stat = fs.statSync(filePath);
 
             if (stat.isDirectory()) {
-                if (file !== 'node_modules' && file !== '.git' && file !== '.jstar') {
-                    this.walk(filePath);
+                // Ignore common build/config directories
+                if (['node_modules', '.git', '.jstar', 'dist', 'coverage'].includes(file)) {
+                    continue;
                 }
+                this.walk(filePath);
             } else {
                 this.checkFile(filePath);
             }
@@ -74,6 +79,8 @@ export class Detective {
 
     private checkFile(filePath: string) {
         if (!filePath.match(/\.(ts|tsx|js|jsx)$/)) return;
+        // Skip .d.ts files
+        if (filePath.endsWith('.d.ts')) return;
 
         const content = fs.readFileSync(filePath, 'utf-8');
         const lines = content.split('\n');
@@ -81,6 +88,7 @@ export class Detective {
         // Line-based rules
         for (const rule of RULES) {
             if (rule.filePattern && !filePath.match(rule.filePattern)) continue;
+            if (rule.excludePattern && filePath.match(rule.excludePattern)) continue;
 
             lines.forEach((line, index) => {
                 if (rule.pattern.test(line)) {
@@ -92,6 +100,8 @@ export class Detective {
         // File-based rules
         for (const rule of FILE_RULES) {
             if (rule.filePattern && !filePath.match(rule.filePattern)) continue;
+            if (rule.excludePattern && filePath.match(rule.excludePattern)) continue;
+
             if (rule.pattern.test(content)) {
                 this.addViolation(filePath, 1, rule);
             }
@@ -132,7 +142,8 @@ export class Detective {
 
 // CLI Integration
 if (require.main === module) {
-    const detective = new Detective(path.join(process.cwd(), 'src'));
+    // Scan current directory by default
+    const detective = new Detective(process.cwd());
     detective.scan();
     detective.report();
 }

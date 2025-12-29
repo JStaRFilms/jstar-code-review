@@ -8,11 +8,11 @@ export class MockLLM {
         tokenizer: undefined,
     };
 
-    async chat(messages: any[], parentEvent?: any): Promise<any> {
+    async chat(messages: { content: string, role: string }[], parentEvent?: any): Promise<{ message: { content: string } }> {
         return { message: { content: "Mock response" } };
     }
 
-    async complete(prompt: string, parentEvent?: any): Promise<any> {
+    async complete(prompt: string, parentEvent?: any): Promise<{ text: string }> {
         return { text: "Mock response" };
     }
 }

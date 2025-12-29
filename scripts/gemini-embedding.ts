@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { Logger } from "./utils/logger";
 
 export class GeminiEmbedding {
     private genAI: GoogleGenerativeAI;
@@ -26,7 +27,7 @@ export class GeminiEmbedding {
                 if (e.message.includes("fetch failed") || e.message.includes("network")) {
                     retries++;
                     const waitTime = Math.pow(2, retries) * 1000;
-                    console.warn(`⚠️ Network error. Retrying in ${waitTime / 1000}s... (${retries}/${maxRetries})`);
+                    Logger.warn(`⚠️ Network error. Retrying in ${waitTime / 1000}s... (${retries}/${maxRetries})`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                 } else {
                     throw e;
@@ -42,7 +43,7 @@ export class GeminiEmbedding {
 
     async getTextEmbeddings(texts: string[]): Promise<number[][]> {
         const embeddings: number[][] = [];
-        console.log(`Creating embeddings for ${texts.length} chunks (Batching to avoid rate limits)...`);
+        Logger.info(`Creating embeddings for ${texts.length} chunks (Batching to avoid rate limits)...`);
 
         // Process in smaller batches with delay
         const BATCH_SIZE = 1; // Strict serial for safety on free tier
@@ -60,15 +61,15 @@ export class GeminiEmbedding {
                         success = true;
                         // Standard delay between calls
                         await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-                        process.stdout.write("."); // Progress indicator
+                        Logger.inline("."); // Progress indicator
                     } catch (e: any) {
                         if (e.message.includes("429") || e.message.includes("quota")) {
                             retries++;
                             const waitTime = Math.pow(2, retries) * 2000; // 2s, 4s, 8s, 16s...
-                            console.warn(`\n⚠️  Rate limit hit. Retrying in ${waitTime / 1000}s...`);
+                            Logger.warn(`\n⚠️  Rate limit hit. Retrying in ${waitTime / 1000}s...`);
                             await new Promise(resolve => setTimeout(resolve, waitTime));
                         } else {
-                            console.error("\n❌ Embedding failed irreversibly:", e.message);
+                            Logger.error("\n❌ Embedding failed irreversibly: " + e.message);
                             throw e;
                         }
                     }
@@ -78,7 +79,7 @@ export class GeminiEmbedding {
                 }
             }
         }
-        console.log("\n✅ Done embedding.");
+        Logger.success("\n✅ Done embedding.");
         return embeddings;
     }
 

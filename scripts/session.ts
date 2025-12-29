@@ -21,8 +21,8 @@ export async function startInteractiveSession(
         return { updatedFindings: interactiveFindings, hasUpdates: false };
     }
 
-    console.log(chalk.bold.magenta("\n🗣️  Interactive Review Session"));
-    console.log(chalk.dim("   Use arrow keys to navigate. Select an issue to debate."));
+    Logger.info(chalk.bold.magenta("\n🗣️  Interactive Review Session"));
+    Logger.dim("   Use arrow keys to navigate. Select an issue to debate.");
 
     while (active) {
         // Re-calculate choices every loop to reflect status changes
@@ -74,11 +74,11 @@ export async function startInteractiveSession(
         const { issue, file } = selected;
 
         // Show Details
-        console.log(chalk.cyan(`\nTitle: ${issue.title}`));
-        console.log(chalk.white(issue.description));
-        console.log(chalk.dim(`File: ${file}`));
-        if (issue.confidenceScore) console.log(chalk.yellow(`Confidence: ${issue.confidenceScore}/5`));
-        if (issue.status) console.log(chalk.green(`Status: ${issue.status}`));
+        Logger.info(chalk.cyan(`\nTitle: ${issue.title}`));
+        Logger.info(chalk.white(issue.description));
+        Logger.dim(`File: ${file}`);
+        if (issue.confidenceScore) Logger.info(chalk.yellow(`Confidence: ${issue.confidenceScore}/5`));
+        if (issue.status) Logger.success(`Status: ${issue.status}`);
 
         // Action Menu
         const action = await showActionMenu(issue.title);
@@ -93,21 +93,21 @@ export async function startInteractiveSession(
                 index
             );
 
-            console.log(chalk.yellow(`\n🤖 Bot: ${result.text}`));
+            Logger.info(chalk.yellow(`\n🤖 Bot: ${result.text}`));
 
             if (result.severity === 'LGTM') {
-                console.log(chalk.green("✅ Issue withdrawn by AI!"));
+                Logger.success("✅ Issue withdrawn by AI!");
                 // Direct update to our state
                 interactiveFindings[selected.fileIndex].issues[selected.issueIndex].status = 'resolved';
                 hasUpdates = true;
             }
 
         } else if (action === 'ignore') {
-            console.log(chalk.dim('Issue ignored locally.'));
+            Logger.dim('Issue ignored locally.');
             interactiveFindings[selected.fileIndex].issues[selected.issueIndex].status = 'ignored';
             hasUpdates = true;
         } else if (action === 'accept') {
-            console.log(chalk.green('Issue accepted.'));
+            Logger.success('Issue accepted.');
         } else if (action === 'exit') {
             active = false;
         }

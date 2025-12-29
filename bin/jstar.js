@@ -29,7 +29,7 @@ function log(msg) {
 
 function printHelp() {
     log(`
-${COLORS.bold}🌟 J-Star Reviewer v2.4.0${COLORS.reset}
+${COLORS.bold}🌟 J-Star Reviewer v2.4.1${COLORS.reset}
 
 ${COLORS.dim}AI-powered code review with local embeddings${COLORS.reset}
 
@@ -40,19 +40,33 @@ ${COLORS.bold}COMMANDS:${COLORS.reset}
   ${COLORS.green}init${COLORS.reset}      Index the current codebase (build the brain)
   ${COLORS.green}review${COLORS.reset}    Review staged git changes
   ${COLORS.green}chat${COLORS.reset}      Resume an interactive session from the last review
+  ${COLORS.green}detect${COLORS.reset}    Run static analysis (Detective Engine)
   ${COLORS.green}setup${COLORS.reset}     Create .env.example and .jstar/ in current directory
 
 ${COLORS.bold}OPTIONS:${COLORS.reset}
   ${COLORS.yellow}--json${COLORS.reset}      Output machine-readable JSON (for CI/CD)
   ${COLORS.yellow}--headless${COLORS.reset}  Enable stdin/stdout protocol (for AI agents)
 
+${COLORS.bold}REVIEW OPTIONS:${COLORS.reset}
+  ${COLORS.yellow}--pr${COLORS.reset}        Review a Pull Request (compare against main/base)
+  ${COLORS.yellow}--base <br>${COLORS.reset} Specify base branch for PR review (default: main)
+  ${COLORS.yellow}--last${COLORS.reset}      Review the very last commit (HEAD~1..HEAD)
+  ${COLORS.yellow}--commit <h>${COLORS.reset} Review a specific commit hash
+  ${COLORS.yellow}--range <a> <b>${COLORS.reset} Review diff between two refs
+
 ${COLORS.bold}EXAMPLES:${COLORS.reset}
   ${COLORS.dim}# First time setup${COLORS.reset}
   jstar init
 
-  ${COLORS.dim}# Review staged changes${COLORS.reset}
-  git add .
+  ${COLORS.dim}# Review staged changes (default)${COLORS.reset}
   jstar review
+
+  ${COLORS.dim}# Review a Pull Request${COLORS.reset}
+  jstar review --pr
+  jstar review --pr --base develop
+
+  ${COLORS.dim}# Review the last commit${COLORS.reset}
+  jstar review --last
 
   ${COLORS.dim}# JSON output for CI${COLORS.reset}
   jstar review --json > report.json
@@ -224,6 +238,10 @@ switch (command) {
         break;
     case 'chat':
         runScript('chat.ts');
+        break;
+    case 'detect':
+    case 'det':
+        runScript('detective.ts');
         break;
     case 'setup':
         createSetupFiles();

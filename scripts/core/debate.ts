@@ -2,6 +2,7 @@ import { VectorStoreIndex, MetadataMode } from "llamaindex";
 import { generateText } from "ai";
 import { createGroq } from "@ai-sdk/groq";
 import { Config } from "../config";
+import { Logger } from "../utils/logger";
 import chalk from "chalk";
 
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY });
@@ -24,7 +25,7 @@ export async function debateIssue(
         throw new Error("GROQ_API_KEY is required for debate mode. Please set it in your .env.local file.");
     }
 
-    console.log(chalk.dim("   🧠  Thinking... (Consulting the Brain)"));
+    Logger.dim("   🧠  Thinking... (Consulting the Brain)");
 
     // 1. Extract keywords/context
     const query = `${userArgument} ${issueTitle}`;
@@ -35,12 +36,12 @@ export async function debateIssue(
     const newContext = contextNodes.map(n => n.node.getContent(MetadataMode.NONE)).join("\n\n").slice(0, 2000);
 
     if (newContext.length >= 2000) {
-        console.log(chalk.yellow("   ⚠️  Context truncated to 2000 chars"));
+        Logger.warn("   ⚠️  Context truncated to 2000 chars");
     }
 
     const sources = contextNodes.map(n => n.node.metadata?.['file_name']).filter(Boolean).join(', ');
     if (sources) {
-        console.log(chalk.dim(`   🔍  Found relevant context from: ${sources}`));
+        Logger.dim(`   🔍  Found relevant context from: ${sources}`);
     }
 
     // 3. Ask the Judge
