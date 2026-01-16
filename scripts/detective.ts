@@ -50,8 +50,11 @@ const FILE_RULES: Rule[] = [
 
 export class Detective {
     violations: Violation[] = [];
+    private includeBuildFiles: boolean;
 
-    constructor(private directory: string) { }
+    constructor(private directory: string, options: { includeBuildFiles?: boolean } = {}) {
+        this.includeBuildFiles = options.includeBuildFiles ?? false;
+    }
 
     async scan(): Promise<Violation[]> {
         this.walk(this.directory);
@@ -67,7 +70,8 @@ export class Detective {
 
             if (stat.isDirectory()) {
                 // Ignore common build/config directories
-                if (['node_modules', '.git', '.jstar', 'dist', 'coverage'].includes(file)) {
+                const ignoredDirs = ['node_modules', '.git', '.jstar', 'dist', 'coverage', '.next'];
+                if (!this.includeBuildFiles && ignoredDirs.includes(file)) {
                     continue;
                 }
                 this.walk(filePath);
@@ -142,8 +146,11 @@ export class Detective {
 
 // CLI Integration
 if (require.main === module) {
+    const args = process.argv.slice(2);
+    const includeBuildFiles = args.includes('--all');
+
     // Scan current directory by default
-    const detective = new Detective(process.cwd());
+    const detective = new Detective(process.cwd(), { includeBuildFiles });
     detective.scan();
     detective.report();
 }

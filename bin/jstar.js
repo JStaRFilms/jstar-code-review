@@ -29,7 +29,7 @@ function log(msg) {
 
 function printHelp() {
     log(`
-${COLORS.bold}🌟 J-Star Reviewer v2.4.1${COLORS.reset}
+${COLORS.bold}🌟 J-Star Reviewer v2.4.4${COLORS.reset}
 
 ${COLORS.dim}AI-powered code review with local embeddings${COLORS.reset}
 
@@ -46,6 +46,7 @@ ${COLORS.bold}COMMANDS:${COLORS.reset}
 ${COLORS.bold}OPTIONS:${COLORS.reset}
   ${COLORS.yellow}--json${COLORS.reset}      Output machine-readable JSON (for CI/CD)
   ${COLORS.yellow}--headless${COLORS.reset}  Enable stdin/stdout protocol (for AI agents)
+  ${COLORS.yellow}--all${COLORS.reset}       Scan all files (including build artifacts like .next) in 'detect' mode
 
 ${COLORS.bold}REVIEW OPTIONS:${COLORS.reset}
   ${COLORS.yellow}--pr${COLORS.reset}        Review a Pull Request (compare against main/base)

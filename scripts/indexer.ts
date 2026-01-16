@@ -88,6 +88,7 @@ async function main() {
         /\.git/,
         /\.jstar/,
         /\.json$/, // Prefer code over JSON data for context unless docs
+        /\.(png|jpg|jpeg|gif|svg|ico|webp|bmp|tiff)$/i, // Exclude images (avoids vector store errors)
     ];
 
     const filteredDocuments = documents.filter(doc => {
