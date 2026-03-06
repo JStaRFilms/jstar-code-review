@@ -1,40 +1,103 @@
 # Deep Code Audit Workflow Blueprint
 
 ## Overview
-This workflow supersedes the standard security audit, providing a "Senior Engineer in a Box" experience. It covers Security, Logic, Completeness (Spec vs Code), and Code Quality.
 
-## Core Philosophy: "The Architect & The Judge"
-We move beyond just finding bugs to evaluating the "Soul" of the code.
-- **The Architect:** Cares about structure, patterns (FSD, Repository Pattern), and long-term maintainability.
-- **The Judge:** Cares about correctness, edge cases, and security vulnerabilities.
+`jstar audit` is now the deterministic security-audit backbone for this repo.
+It turns the older prose-only audit checklist into a repeatable rule pass with:
 
-## Workflow Stages
+- Fixed rule inputs
+- Stable file selection
+- Structured JSON and markdown output
+- Explicit ignore handling through `.jstar/audit-ignore.json`
 
-### Phase 0: Scope
-- **FULL:** All files.
-- **FEATURE:** Specific domain (e.g., `features/auth`).
-- **DIFF:** Only what changed.
+## Recommended Modes
 
-### Phase 1: The Detective (Static)
-- **Dependencies:** `pnpm audit`.
-- **Patterns:** Regex for secrets, `eval`, `TODO`, and dangerous functions.
+### Full audit
+Run this for release readiness or broad security review.
 
-### Phase 2: The Graph (Relational)
-- **Trace:** User Input -> Route -> Service -> DB.
-- **Validation:** Verify Zod at the edge.
+```bash
+jstar audit
+```
 
-### Phase 3: The Auditor (Completeness)
-- **Spec Check:** Read `docs/features/*.md`.
-- **Verify:** Does every requirement in the doc have a corresponding function?
-- **Zombie Code:** Is there code that does nothing?
+Output:
+- `.jstar/audit_report.md`
+- `.jstar/audit_report.json`
 
-### Phase 4: The Judge (Logic)
-- **Sandbox:** Mental simulation of attacks and edge cases (Null, Huge Payloads, Race Conditions).
+### Focused audit
+Use this when you only want to audit a specific area.
 
-### Phase 5: The Architect (Quality)
-- **Performance:** N+1 checks (`await` in loops).
-- **Clean Code:** Function length < 50 lines, no magic strings.
-- **Types:** No `any`.
+```bash
+jstar audit --path src
+jstar audit --path app/api
+```
 
-### Phase 6: Reporting
-- **Output:** `.jstar/audit_report.md` with categorized findings.
+### Diff audit
+Use the same diff selectors as `jstar review` when you want deterministic security checks on a change set.
+
+```bash
+jstar audit --last
+jstar audit --pr
+jstar audit --range main HEAD
+```
+
+## What the Audit Covers
+
+### Deterministic file rules
+- Hardcoded secrets
+- Dynamic code execution (`eval`, `Function`)
+- Unsafe raw SQL helpers
+- Raw HTML injection sinks
+- Server-only env vars referenced in client modules
+- Misplaced `"use client"` directives
+- `console.log` and `TODO` markers as lower-severity hygiene checks
+
+### Repository guardrails
+- Sensitive files tracked in git
+- Missing `.gitignore`
+- Missing sensitive `.gitignore` patterns
+
+## Output Model
+
+The JSON report is machine-readable and stable enough for automation:
+
+```ts
+interface AuditReport {
+  date: string;
+  mode: string;
+  target: string;
+  rulesVersion: string;
+  summary: {
+    filesScanned: number;
+    findings: number;
+    critical: number;
+    high: number;
+    warning: number;
+    info: number;
+    ignored: number;
+  };
+  findings: AuditFinding[];
+  ignoredFindings: AuditFinding[];
+  recommendedAction: string;
+}
+```
+
+## False Positive Handling
+
+Ignored findings live in `.jstar/audit-ignore.json`.
+
+Example:
+
+```json
+{
+  "ignores": [
+    {
+      "ruleId": "SEC-002",
+      "file": "src/eval.ts",
+      "line": 2,
+      "reason": "Intentional sandbox fixture"
+    }
+  ]
+}
+```
+
+Ignored findings are removed from active results and tracked separately in the report.

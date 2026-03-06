@@ -1,18 +1,21 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Logger } from "./utils/logger";
 
+const DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001";
+
 export class GeminiEmbedding {
     private genAI: GoogleGenerativeAI;
     private model: any;
+    private modelName: string;
 
     constructor() {
         const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
         if (!apiKey) {
             throw new Error("GEMINI_API_KEY is missing from environment variables.");
         }
+        this.modelName = process.env.GEMINI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
         this.genAI = new GoogleGenerativeAI(apiKey);
-        // User requested 'text-embedding-004', which has better rate limits
-        this.model = this.genAI.getGenerativeModel({ model: "text-embedding-004" });
+        this.model = this.genAI.getGenerativeModel({ model: this.modelName });
     }
 
     async getTextEmbedding(text: string): Promise<number[]> {
@@ -24,6 +27,11 @@ export class GeminiEmbedding {
                 const result = await this.model.embedContent(text);
                 return result.embedding.values;
             } catch (e: any) {
+                if (e.message.includes("not found") || e.message.includes("not supported for embedContent")) {
+                    throw new Error(
+                        `Embedding model "${this.modelName}" is unavailable. Set GEMINI_EMBEDDING_MODEL to a valid Google embedding model such as "${DEFAULT_EMBEDDING_MODEL}". Original error: ${e.message}`,
+                    );
+                }
                 if (e.message.includes("fetch failed") || e.message.includes("network")) {
                     retries++;
                     const waitTime = Math.pow(2, retries) * 1000;

@@ -1,52 +1,33 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import chalk from 'chalk';
-import { Logger } from './utils/logger';
+import * as fs from "fs";
+import * as path from "path";
+import chalk from "chalk";
+import { AuditFinding } from "./types";
+import { scanFileContent } from "./core/deterministic-audit";
+import { normalizeRelativePath, walkProjectFiles } from "./core/project";
+import { Logger } from "./utils/logger";
 
 interface Violation {
     file: string;
     line: number;
     message: string;
-    severity: 'high' | 'medium' | 'low';
+    severity: "high" | "medium" | "low";
     code: string;
 }
 
-interface Rule {
-    id: string;
-    severity: 'high' | 'medium' | 'low';
-    message: string;
-    pattern: RegExp;
-    filePattern?: RegExp; // Only check files matching this pattern
-    excludePattern?: RegExp; // Exclude files matching this pattern
+function mapFindingToViolation(finding: AuditFinding): Violation {
+    return {
+        file: finding.file,
+        line: finding.line ?? 1,
+        message: `${finding.title}. ${finding.message}`,
+        severity:
+            finding.severity === "CRITICAL" || finding.severity === "HIGH"
+                ? "high"
+                : finding.severity === "WARNING"
+                    ? "medium"
+                    : "low",
+        code: finding.ruleId,
+    };
 }
-
-const RULES: Rule[] = [
-    {
-        id: 'SEC-001',
-        severity: 'high',
-        message: 'Possible Hardcoded Secret detected',
-        pattern: /(api_key|secret|password|token)\s*[:=]\s*['"`][a-zA-Z0-9_\-\.]{10,}['"`]/i
-    },
-    {
-        id: 'ARCH-001',
-        severity: 'medium',
-        message: 'Avoid using console.log in production code',
-        pattern: /console\.log\(/,
-        excludePattern: /(bin[\\/]jstar\.js|scripts[\\/]utils[\\/]logger\.ts|setup\.js|test[\\/])/
-    },
-];
-
-// File-level rules that check the whole content
-const FILE_RULES: Rule[] = [
-    {
-        id: 'ARCH-002',
-        severity: 'high',
-        message: 'Next.js "use client" must be at the very top of the file (before imports)',
-        pattern: /^(?!(?:\s*|(?:\/\/[^\n]*\n)|(?:\/\*[\s\S]*?\*\/))*['"]use client['"]).*['"]use client['"]/s,
-        filePattern: /\.tsx?$/,
-        excludePattern: /(scripts|test)[\\/]/
-    }
-];
 
 export class Detective {
     violations: Violation[] = [];
@@ -57,69 +38,18 @@ export class Detective {
     }
 
     async scan(): Promise<Violation[]> {
-        this.walk(this.directory);
-        return this.violations;
-    }
-
-    private walk(dir: string) {
-        if (!fs.existsSync(dir)) return;
-        const files = fs.readdirSync(dir);
-        for (const file of files) {
-            const filePath = path.join(dir, file);
-            const stat = fs.statSync(filePath);
-
-            if (stat.isDirectory()) {
-                // Ignore common build/config directories
-                const ignoredDirs = ['node_modules', '.git', '.jstar', 'dist', 'coverage', '.next'];
-                if (!this.includeBuildFiles && ignoredDirs.includes(file)) {
-                    continue;
-                }
-                this.walk(filePath);
-            } else {
-                this.checkFile(filePath);
-            }
-        }
-    }
-
-    private checkFile(filePath: string) {
-        if (!filePath.match(/\.(ts|tsx|js|jsx)$/)) return;
-        // Skip .d.ts files
-        if (filePath.endsWith('.d.ts')) return;
-
-        const content = fs.readFileSync(filePath, 'utf-8');
-        const lines = content.split('\n');
-
-        // Line-based rules
-        for (const rule of RULES) {
-            if (rule.filePattern && !filePath.match(rule.filePattern)) continue;
-            if (rule.excludePattern && filePath.match(rule.excludePattern)) continue;
-
-            lines.forEach((line, index) => {
-                if (rule.pattern.test(line)) {
-                    this.addViolation(filePath, index + 1, rule);
-                }
-            });
-        }
-
-        // File-based rules
-        for (const rule of FILE_RULES) {
-            if (rule.filePattern && !filePath.match(rule.filePattern)) continue;
-            if (rule.excludePattern && filePath.match(rule.excludePattern)) continue;
-
-            if (rule.pattern.test(content)) {
-                this.addViolation(filePath, 1, rule);
-            }
-        }
-    }
-
-    private addViolation(filePath: string, line: number, rule: Rule) {
-        this.violations.push({
-            file: path.relative(process.cwd(), filePath),
-            line,
-            message: rule.message,
-            severity: rule.severity,
-            code: rule.id
+        const files = walkProjectFiles(this.directory, {
+            cwd: process.cwd(),
+            includeBuildFiles: this.includeBuildFiles,
         });
+
+        this.violations = files.flatMap((relativePath) => {
+            const absolutePath = path.resolve(process.cwd(), relativePath);
+            const content = fs.readFileSync(absolutePath, "utf-8");
+            return scanFileContent(content, normalizeRelativePath(absolutePath)).map(mapFindingToViolation);
+        });
+
+        return this.violations;
     }
 
     report() {
@@ -129,13 +59,12 @@ export class Detective {
         }
 
         Logger.info(chalk.red(`🚨 Detective Engine found ${this.violations.length} violations:`));
-        // Only show first 10 to avoid wall of text
         const total = this.violations.length;
         const toShow = this.violations.slice(0, 10);
 
-        toShow.forEach(v => {
-            const color = v.severity === 'high' ? chalk.red : chalk.yellow;
-            Logger.info(color(`[${v.code}] ${v.file}:${v.line} - ${v.message}`));
+        toShow.forEach((violation) => {
+            const color = violation.severity === "high" ? chalk.red : chalk.yellow;
+            Logger.info(color(`[${violation.code}] ${violation.file}:${violation.line} - ${violation.message}`));
         });
 
         if (total > 10) {
@@ -144,13 +73,9 @@ export class Detective {
     }
 }
 
-// CLI Integration
 if (require.main === module) {
     const args = process.argv.slice(2);
-    const includeBuildFiles = args.includes('--all');
-
-    // Scan current directory by default
+    const includeBuildFiles = args.includes("--all");
     const detective = new Detective(process.cwd(), { includeBuildFiles });
-    detective.scan();
-    detective.report();
+    detective.scan().then(() => detective.report());
 }

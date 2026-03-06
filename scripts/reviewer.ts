@@ -1,28 +1,31 @@
 import { generateText } from "ai";
 import { createGroq } from "@ai-sdk/groq";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import * as path from "path";
 import * as fs from "fs";
 import chalk from "chalk";
 import simpleGit from "simple-git";
-import { Logger } from "./utils/logger";
-import { Config } from "./config";
-import { Detective } from "./detective";
-import { GeminiEmbedding } from "./gemini-embedding";
-import { MockLLM } from "./mock-llm";
-import { FileFinding, DashboardReport, LLMReviewResponse, EMPTY_REVIEW } from "./types";
-import { renderDashboard, determineStatus, generateRecommendation } from "./dashboard";
-import { startInteractiveSession } from "./session";
-import { critiqueFindings } from "./core/critique";
 import {
     VectorStoreIndex,
     storageContextFromDefaults,
     MetadataMode,
-    serviceContextFromDefaults
+    serviceContextFromDefaults,
 } from "llamaindex";
+import { Logger } from "./utils/logger";
+import { Config } from "./config";
+import { GeminiEmbedding } from "./gemini-embedding";
+import { MockLLM } from "./mock-llm";
+import { DashboardReport, FileFinding, LLMReviewResponse, ReviewIssue, Severity } from "./types";
+import { renderDashboard, determineStatus, generateRecommendation } from "./dashboard";
+import { startInteractiveSession } from "./session";
+import { critiqueFindings } from "./core/critique";
+import { mapAuditSeverityToReviewSeverity, runDeterministicAudit } from "./core/deterministic-audit";
+import { chunkDiffByFile, extractDiffFileNames, resolveReviewTarget } from "./core/review-target";
+import { shouldSkipReviewFile } from "./core/project";
 
-const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-const google = createGoogleGenerativeAI({ apiKey: geminiKey });
+const geminiKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY });
 
 const embedModel = new GeminiEmbedding();
@@ -30,79 +33,37 @@ const llm = new MockLLM();
 const serviceContext = serviceContextFromDefaults({ embedModel, llm: llm as any });
 
 const STORAGE_DIR = path.join(process.cwd(), ".jstar", "storage");
-const SOURCE_DIR = path.join(process.cwd(), "scripts");
 const OUTPUT_FILE = path.join(process.cwd(), ".jstar", "last-review.md");
+const SESSION_FILE = path.join(process.cwd(), ".jstar", "session.json");
 const git = simpleGit();
 
-// --- Config ---
 const MODEL_NAME = Config.MODEL_NAME;
 const MAX_TOKENS_PER_REQUEST = 8000;
 const CHARS_PER_TOKEN = 4;
 const DELAY_BETWEEN_CHUNKS_MS = 2000;
 
-// --- Helpers ---
+const SEVERITY_RANK: Record<Severity, number> = {
+    P0_CRITICAL: 0,
+    P1_HIGH: 1,
+    P2_MEDIUM: 2,
+    LGTM: 3,
+};
+
 function estimateTokens(text: string): number {
     return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-const EXCLUDED_PATTERNS = [
-    /pnpm-lock\.yaml/,
-    /package-lock\.json/,
-    /yarn\.lock/,
-    /\.env/,
-    /\.json$/,
-    /\.txt$/,
-    /\.md$/,
-    /node_modules/,
-    /\.jstar\//,
-];
-
-function shouldSkipFile(fileName: string): boolean {
-    return EXCLUDED_PATTERNS.some(pattern => pattern.test(fileName));
-}
-
-function chunkDiffByFile(diff: string): string[] {
-    return diff.split(/(?=^diff --git)/gm).filter(Boolean);
-}
-
 function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function getDefaultBranch(): Promise<string> {
-    try {
-        // Method 1: Check remote HEAD (most reliable)
-        try {
-            const remote = await git.remote(['show', 'origin']);
-            if (typeof remote === 'string') {
-                const match = remote.match(/HEAD branch: (\S+)/);
-                if (match) return match[1];
-            }
-        } catch (e) {
-            // No remote or network issue, proceed to local check
-        }
-
-        // Method 2: Check which common branch exists locally
-        const branches = await git.branchLocal();
-        if (branches.all.includes('main')) return 'main';
-        if (branches.all.includes('master')) return 'master';
-
-    } catch (e) {
-        // Fallback
-    }
-    return 'main';
-}
-
-/**
- * Filter issues by confidence threshold and log what was removed
- */
 function filterByConfidence(findings: FileFinding[]): FileFinding[] {
     const threshold = Config.CONFIDENCE_THRESHOLD;
     let removedCount = 0;
 
-    const filtered = findings.map(finding => {
-        const validIssues = finding.issues.filter(issue => {
-            const confidence = issue.confidenceScore ?? 5; // Default to high if not specified
+    const filtered = findings.map((finding) => {
+        const validIssues = finding.issues.filter((issue) => {
+            const confidence = issue.confidenceScore ?? 5;
             if (confidence < threshold) {
                 removedCount++;
                 Logger.info(chalk.dim(`   ⚡ Low confidence (${confidence}): "${issue.title}" - filtered out`));
@@ -114,7 +75,7 @@ function filterByConfidence(findings: FileFinding[]): FileFinding[] {
         return {
             ...finding,
             issues: validIssues,
-            severity: validIssues.length === 0 ? 'LGTM' as const : finding.severity
+            severity: validIssues.length === 0 ? "LGTM" as const : finding.severity,
         };
     });
 
@@ -127,54 +88,140 @@ function filterByConfidence(findings: FileFinding[]): FileFinding[] {
 
 function parseReviewResponse(text: string): LLMReviewResponse {
     try {
-        // Try to extract JSON from the response
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
-
-            // Validate structure
             if (
                 parsed &&
-                typeof parsed === 'object' &&
+                typeof parsed === "object" &&
                 Array.isArray(parsed.issues) &&
-                ['P0_CRITICAL', 'P1_HIGH', 'P2_MEDIUM', 'LGTM'].includes(parsed.severity)
+                ["P0_CRITICAL", "P1_HIGH", "P2_MEDIUM", "LGTM"].includes(parsed.severity)
             ) {
                 return {
                     severity: parsed.severity,
-                    issues: parsed.issues
+                    issues: parsed.issues,
                 };
             }
         }
-    } catch (e) {
-        // Parse failed, try to extract from markdown
+    } catch {
+        // Fall back to conservative parsing below.
     }
 
-    // Fallback: If "LGTM" in text, it's clean
-    if (text.includes('LGTM') || text.includes('✅')) {
-        return { severity: 'LGTM', issues: [] };
+    if (text.includes("LGTM") || text.includes("✅")) {
+        return { severity: "LGTM", issues: [] };
     }
 
-    // Otherwise, assume there are issues (treat as medium)
     return {
         severity: Config.DEFAULT_SEVERITY,
-        issues: [{
-            title: 'Review Notes',
-            description: text.slice(0, 500),
-            fixPrompt: 'Review the file and address the issues mentioned above.'
-        }]
+        issues: [
+            {
+                title: "Review Notes",
+                description: text.slice(0, 500),
+                fixPrompt: "Review the file and address the issues mentioned above.",
+            },
+        ],
     };
 }
 
-// --- Main ---
+function severityMax(left: Severity, right: Severity): Severity {
+    return SEVERITY_RANK[left] <= SEVERITY_RANK[right] ? left : right;
+}
+
+function groupDeterministicFindings(findings: Awaited<ReturnType<typeof runDeterministicAudit>>["findings"]): FileFinding[] {
+    const grouped = new Map<string, FileFinding>();
+
+    findings.forEach((finding) => {
+        const reviewIssue: ReviewIssue = {
+            title: `[${finding.ruleId}] ${finding.title}`,
+            description: finding.message,
+            line: finding.line,
+            fixPrompt: finding.recommendation,
+            confidenceScore: 5,
+            ruleId: finding.ruleId,
+            source: "deterministic",
+        };
+
+        const severity = mapAuditSeverityToReviewSeverity(finding.severity);
+        const existing = grouped.get(finding.file);
+        if (!existing) {
+            grouped.set(finding.file, {
+                file: finding.file,
+                severity,
+                issues: [reviewIssue],
+            });
+            return;
+        }
+
+        existing.issues.push(reviewIssue);
+        existing.severity = severityMax(existing.severity, severity);
+    });
+
+    return [...grouped.values()].sort((left, right) => left.file.localeCompare(right.file));
+}
+
+function mergeFindings(primary: FileFinding[], secondary: FileFinding[]): FileFinding[] {
+    const grouped = new Map<string, FileFinding>();
+
+    const insert = (finding: FileFinding) => {
+        const existing = grouped.get(finding.file);
+        if (!existing) {
+            grouped.set(finding.file, {
+                ...finding,
+                issues: [...finding.issues],
+            });
+            return;
+        }
+
+        existing.severity = severityMax(existing.severity, finding.severity);
+        existing.issues.push(...finding.issues);
+    };
+
+    primary.forEach(insert);
+    secondary.forEach(insert);
+
+    return [...grouped.values()]
+        .map((finding) => ({
+            ...finding,
+            issues: finding.issues.sort((left, right) => {
+                const lineDelta = (left.line ?? 0) - (right.line ?? 0);
+                if (lineDelta !== 0) {
+                    return lineDelta;
+                }
+                return left.title.localeCompare(right.title);
+            }),
+        }))
+        .sort((left, right) => left.file.localeCompare(right.file));
+}
+
+function logDeterministicSummary(report: Awaited<ReturnType<typeof runDeterministicAudit>>) {
+    if (report.findings.length === 0) {
+        Logger.info(chalk.green("✅ Deterministic Security Pass: No findings in the review scope."));
+        return;
+    }
+
+    Logger.info(
+        chalk.red(
+            `🚨 Deterministic Security Pass: ${report.summary.critical} critical, ${report.summary.high} high, ${report.summary.warning} warning.`,
+        ),
+    );
+
+    report.findings.slice(0, 10).forEach((finding) => {
+        const location = finding.line ? `${finding.file}:${finding.line}` : finding.file;
+        Logger.info(chalk.yellow(`   [${finding.ruleId}] ${location} - ${finding.title}`));
+    });
+
+    if (report.findings.length > 10) {
+        Logger.dim(`... and ${report.findings.length - 10} more deterministic finding(s).`);
+    }
+}
+
 async function main() {
-    // Initialize logger mode based on CLI flags
     Logger.init();
 
     Logger.info(chalk.blue("🕵️  J-Star Reviewer: Analyzing your changes...\n"));
 
-    // 0. Environment Validation
     if (!geminiKey || !process.env.GROQ_API_KEY) {
-        Logger.error(chalk.red("❌ Missing API Keys!"));
+        Logger.error("❌ Missing API Keys!");
         Logger.info(chalk.yellow("\nPlease ensure you have a .env.local file with:"));
         Logger.info(chalk.white("- GEMINI_API_KEY (or GOOGLE_API_KEY)"));
         Logger.info(chalk.white("- GROQ_API_KEY"));
@@ -182,115 +229,64 @@ async function main() {
         return;
     }
 
-    // 1. Detective
-    Logger.info(chalk.blue("🔎 Running Detective Engine..."));
-
-    const detective = new Detective(SOURCE_DIR);
-    await detective.scan();
-    detective.report();
-
-    // 1. Determine Diff Target
     const args = process.argv.slice(2);
-    let diff: string;
-    let reviewTarget = "Staged Changes";
-
-    if (args.includes('--last')) {
-        reviewTarget = "Last Commit";
-        diff = await git.diff(["HEAD~1", "HEAD"]);
-    } else if (args.includes('--commit')) {
-        const hashIndex = args.indexOf('--commit') + 1;
-        if (hashIndex < args.length) {
-            const hash = args[hashIndex];
-            reviewTarget = `Commit ${hash}`;
-            diff = await git.diff([`${hash}~1`, `${hash}`]);
-        } else {
-            Logger.error(chalk.red("❌ Missing commit hash for --commit"));
-            return;
-        }
-    } else if (args.includes('--range')) {
-        const rangeIndex = args.indexOf('--range') + 1;
-        if (rangeIndex + 1 < args.length) {
-            const start = args[rangeIndex];
-            const end = args[rangeIndex + 1];
-            reviewTarget = `Range ${start}..${end}`;
-            diff = await git.diff([start, end]);
-        } else {
-            Logger.error(chalk.red("❌ Missing arguments for --range (usage: --range <start> <end>)"));
-            return;
-        }
-    } else if (args.includes('--pr')) {
-        const prIndex = args.indexOf('--pr');
-        // Check for --base flag first
-        let baseBranch = 'main';
-
-        if (args.includes('--base')) {
-            const baseIndex = args.indexOf('--base') + 1;
-            if (baseIndex < args.length) {
-                baseBranch = args[baseIndex];
-            } else {
-                Logger.error(chalk.red("❌ Missing branch name for --base"));
-                return;
-            }
-        } else {
-            // Check positional argument (backward compatibility)
-            const potentialBase = args[prIndex + 1];
-            if (potentialBase && !potentialBase.startsWith('--')) {
-                baseBranch = potentialBase;
-            } else {
-                // Auto-detect
-                baseBranch = await getDefaultBranch();
-            }
-        }
-
-        reviewTarget = `PR (HEAD vs ${baseBranch})`;
-        // Use triple-dot for merge-base difference (what a PR shows)
-        try {
-            diff = await git.diff([`${baseBranch}...HEAD`]);
-        } catch (e) {
-            Logger.error(chalk.red(`❌ Failed to diff against ${baseBranch}. Does the branch exist?`));
-            return;
-        }
-    } else {
-        // Default: Staged changes
-        diff = await git.diff(["--staged"]);
+    let target;
+    try {
+        target = await resolveReviewTarget(git, args);
+    } catch (error: any) {
+        Logger.error(`❌ ${error.message}`);
+        return;
     }
 
-    if (!diff) {
-        if (reviewTarget === "Staged Changes") {
+    if (!target.diff) {
+        if (target.label === "Staged Changes") {
             Logger.info(chalk.green("\n✅ No staged changes to review. (Did you 'git add'?)"));
             Logger.info(chalk.dim("   Tip: Use '--last' to review the previous commit."));
         } else {
-            Logger.info(chalk.green(`\n✅ No changes found in ${reviewTarget}.`));
+            Logger.info(chalk.green(`\n✅ No changes found in ${target.label}.`));
         }
         return;
     }
 
-    Logger.info(chalk.blue(`\n📝 Reviewing: ${reviewTarget}`));
+    Logger.info(chalk.blue(`\n📝 Reviewing: ${target.label}`));
 
-    // 2. Load the Brain
+    const changedFiles = extractDiffFileNames(target.diff)
+        .map((filePath) => path.resolve(process.cwd(), filePath))
+        .filter((filePath) => fs.existsSync(filePath));
+
+    const deterministicReport = await runDeterministicAudit({
+        mode: "REVIEW_SCAN",
+        target: target.label,
+        filePaths: changedFiles,
+        includeRepositoryChecks: false,
+    });
+    logDeterministicSummary(deterministicReport);
+
     if (!fs.existsSync(STORAGE_DIR)) {
         Logger.error(chalk.red("❌ Local Brain not found. Run 'pnpm run index:init' first."));
         return;
     }
+
     const storageContext = await storageContextFromDefaults({ persistDir: STORAGE_DIR });
     const index = await VectorStoreIndex.init({ storageContext, serviceContext });
 
-    // 3. Retrieval
     const retriever = index.asRetriever({ similarityTopK: 1 });
-    const keywords = (diff.match(/import .* from ['"](.*)['"]/g) || [])
-        .map(s => s.replace(/import .* from ['"](.*)['"]/, '$1'))
-        .join(" ").slice(0, 300) || "general context";
+    const keywords =
+        (target.diff.match(/import .* from ['"](.*)['"]/g) || [])
+            .map((statement) => statement.replace(/import .* from ['"](.*)['"]/, "$1"))
+            .join(" ")
+            .slice(0, 300) || "general context";
     const contextNodes = await retriever.retrieve(keywords);
-    const relatedContext = contextNodes.map(n => n.node.getContent(MetadataMode.NONE).slice(0, 1500)).join("\n");
+    const relatedContext = contextNodes
+        .map((node) => node.node.getContent(MetadataMode.NONE).slice(0, 1500))
+        .join("\n");
 
     Logger.info(chalk.yellow(`\n🧠 Found ${contextNodes.length} context chunk.`));
 
-    // 4. Chunk the Diff
-    const fileChunks = chunkDiffByFile(diff);
-    const totalTokens = estimateTokens(diff);
+    const fileChunks = chunkDiffByFile(target.diff);
+    const totalTokens = estimateTokens(target.diff);
     Logger.info(chalk.dim(`   Total diff: ~${totalTokens} tokens across ${fileChunks.length} files.`));
 
-    // 5. Structured JSON Prompt (Conservative)
     const systemPrompt = `You are J-Star, a Senior Code Reviewer. Be CONSERVATIVE and PRECISE.
 
 Analyze the Git Diff and return a JSON response with this EXACT structure:
@@ -330,7 +326,7 @@ CRITICAL RULES:
 
 Context: ${relatedContext.slice(0, 800)}`;
 
-    const findings: FileFinding[] = [];
+    const llmFindings: FileFinding[] = [];
     let chunkIndex = 0;
     let skippedCount = 0;
 
@@ -340,26 +336,26 @@ Context: ${relatedContext.slice(0, 800)}`;
         chunkIndex++;
         const fileName = chunk.match(/diff --git a\/(.+?) /)?.[1] || `Chunk ${chunkIndex}`;
 
-        // Skip excluded files
-        if (shouldSkipFile(fileName)) {
+        if (shouldSkipReviewFile(fileName)) {
             Logger.info(chalk.dim(`   ⏭️  Skipping ${fileName} (excluded)`));
             skippedCount++;
             continue;
         }
 
         const chunkTokens = estimateTokens(chunk) + estimateTokens(systemPrompt);
-
-        // Skip huge files
         if (chunkTokens > MAX_TOKENS_PER_REQUEST) {
             Logger.info(chalk.yellow(`   ⚠️  Skipping ${fileName} (too large: ~${chunkTokens} tokens)`));
-            findings.push({
+            llmFindings.push({
                 file: fileName,
                 severity: Config.DEFAULT_SEVERITY,
-                issues: [{
-                    title: 'File too large for review',
-                    description: `This file has ~${chunkTokens} tokens which exceeds the limit.`,
-                    fixPrompt: 'Consider splitting this file into smaller modules.'
-                }]
+                issues: [
+                    {
+                        title: "File too large for review",
+                        description: `This file has ~${chunkTokens} tokens which exceeds the limit.`,
+                        fixPrompt: "Consider splitting this file into smaller modules.",
+                        source: "llm",
+                    },
+                ],
             });
             continue;
         }
@@ -375,88 +371,101 @@ Context: ${relatedContext.slice(0, 800)}`;
             });
 
             const response = parseReviewResponse(text);
-            findings.push({
+            llmFindings.push({
                 file: fileName,
                 severity: response.severity,
-                issues: response.issues
+                issues: response.issues.map((issue) => ({
+                    ...issue,
+                    source: "llm",
+                })),
             });
 
-            const emoji = response.severity === 'LGTM' ? '✅' :
-                response.severity === 'P0_CRITICAL' ? '🛑' :
-                    response.severity === 'P1_HIGH' ? '⚠️' : '📝';
+            const emoji =
+                response.severity === "LGTM"
+                    ? "✅"
+                    : response.severity === "P0_CRITICAL"
+                        ? "🛑"
+                        : response.severity === "P1_HIGH"
+                            ? "⚠️"
+                            : "📝";
             Logger.info(` ${emoji}`);
-
         } catch (error: any) {
             Logger.info(chalk.red(` ❌ (${error.message.slice(0, 50)})`));
-            findings.push({
+            llmFindings.push({
                 file: fileName,
                 severity: Config.DEFAULT_SEVERITY,
-                issues: [{
-                    title: 'Review failed',
-                    description: error.message,
-                    fixPrompt: 'Retry the review or check manually.'
-                }]
+                issues: [
+                    {
+                        title: "Review failed",
+                        description: error.message,
+                        fixPrompt: "Retry the review or check manually.",
+                        source: "llm",
+                    },
+                ],
             });
         }
 
-        // Rate limit delay
         if (chunkIndex < fileChunks.length) {
             await sleep(DELAY_BETWEEN_CHUNKS_MS);
         }
     }
 
-    // 6. Confidence Filtering
     Logger.info(chalk.blue("\n🎯 Filtering by Confidence...\n"));
-    let filteredFindings = filterByConfidence(findings);
+    let processedLlmFindings = filterByConfidence(llmFindings);
 
-    // 7. Self-Critique Pass (if enabled)
     if (Config.ENABLE_SELF_CRITIQUE) {
-        filteredFindings = await critiqueFindings(filteredFindings, diff);
+        processedLlmFindings = await critiqueFindings(processedLlmFindings, target.diff);
     }
 
-    // 8. Build Dashboard Report
+    const deterministicReviewFindings = groupDeterministicFindings(deterministicReport.findings);
+    const findings = mergeFindings(processedLlmFindings, deterministicReviewFindings);
+
     const metrics = {
         filesScanned: fileChunks.length - skippedCount,
         totalTokens,
-        violations: filteredFindings.reduce((sum, f) => sum + f.issues.length, 0),
-        critical: filteredFindings.filter(f => f.severity === 'P0_CRITICAL').length,
-        high: filteredFindings.filter(f => f.severity === 'P1_HIGH').length,
-        medium: filteredFindings.filter(f => f.severity === 'P2_MEDIUM').length,
-        lgtm: filteredFindings.filter(f => f.severity === 'LGTM').length,
+        violations: findings.reduce((sum, finding) => sum + finding.issues.length, 0),
+        critical: findings.filter((finding) => finding.severity === "P0_CRITICAL").length,
+        high: findings.filter((finding) => finding.severity === "P1_HIGH").length,
+        medium: findings.filter((finding) => finding.severity === "P2_MEDIUM").length,
+        lgtm: findings.filter((finding) => finding.severity === "LGTM").length,
     };
 
     const report: DashboardReport = {
-        date: new Date().toISOString().split('T')[0],
-        reviewer: 'Detective Engine & Judge',
+        date: new Date().toISOString().split("T")[0],
+        reviewer: "Deterministic Security Pass & Judge",
         status: determineStatus(metrics),
         metrics,
-        findings: filteredFindings,
-        recommendedAction: generateRecommendation(metrics)
+        findings,
+        recommendedAction: generateRecommendation(metrics),
     };
 
-    // 7. Render and Save Dashboard
     const dashboard = renderDashboard(report);
-
-    // Ensure .jstar directory exists
     fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true });
     fs.writeFileSync(OUTPUT_FILE, dashboard);
-
-    // Save Session State for "jstar chat"
-    const SESSION_FILE = path.join(process.cwd(), ".jstar", "session.json");
-    fs.writeFileSync(SESSION_FILE, JSON.stringify({
-        date: report.date,
-        findings: report.findings,
-        metrics: report.metrics
-    }, null, 2));
+    fs.writeFileSync(
+        SESSION_FILE,
+        JSON.stringify(
+            {
+                date: report.date,
+                findings: report.findings,
+                metrics: report.metrics,
+            },
+            null,
+            2,
+        ),
+    );
 
     Logger.info("\n" + chalk.bold.green("📊 DASHBOARD GENERATED"));
     Logger.info(chalk.dim(`   Saved to: ${OUTPUT_FILE}`));
     Logger.info("\n" + chalk.bold.white("─".repeat(50)));
 
-    // Print summary to console
-    const statusEmoji = report.status === 'APPROVED' ? '🟢' :
-        report.status === 'NEEDS_REVIEW' ? '🟡' : '🔴';
-    Logger.info(`\n${statusEmoji} Status: ${report.status.replace('_', ' ')}`);
+    const statusEmoji =
+        report.status === "APPROVED"
+            ? "🟢"
+            : report.status === "NEEDS_REVIEW"
+                ? "🟡"
+                : "🔴";
+    Logger.info(`\n${statusEmoji} Status: ${report.status.replace("_", " ")}`);
     Logger.info(`   🛑 Critical: ${metrics.critical}`);
     Logger.info(`   ⚠️  High: ${metrics.high}`);
     Logger.info(`   📝 Medium: ${metrics.medium}`);
@@ -464,49 +473,53 @@ Context: ${relatedContext.slice(0, 800)}`;
     Logger.info(`\n💡 ${report.recommendedAction}`);
     Logger.info(chalk.dim(`\n📄 Full report: ${OUTPUT_FILE}`));
 
-    // 8. Interactive Session OR JSON Output
     if (Logger.isHeadless()) {
-        // In JSON mode: output report to stdout and skip interactive session
         Logger.json(report);
-    } else {
-        // Normal TUI mode: start interactive session
-        const { updatedFindings, hasUpdates } = await startInteractiveSession(findings, index);
+        return;
+    }
 
-        if (hasUpdates) {
-            Logger.info(chalk.blue("\n🔄 Updating Dashboard with session changes..."));
+    const { updatedFindings, hasUpdates } = await startInteractiveSession(findings, index);
+    if (!hasUpdates) {
+        return;
+    }
 
-            // Recalculate metrics
-            const newMetrics = {
-                filesScanned: fileChunks.length - skippedCount,
-                totalTokens,
-                violations: updatedFindings.reduce((sum, f) => sum + f.issues.length, 0),
-                critical: updatedFindings.filter(f => f.severity === 'P0_CRITICAL').length,
-                high: updatedFindings.filter(f => f.severity === 'P1_HIGH').length,
-                medium: updatedFindings.filter(f => f.severity === 'P2_MEDIUM').length,
-                lgtm: updatedFindings.filter(f => f.severity === 'LGTM').length,
-            };
+    Logger.info(chalk.blue("\n🔄 Updating Dashboard with session changes..."));
 
-            const newReport: DashboardReport = {
-                ...report, // Keep date/reviewer
-                metrics: newMetrics,
-                findings: updatedFindings,
-                status: determineStatus(newMetrics),
-                recommendedAction: generateRecommendation(newMetrics)
-            };
+    const newMetrics = {
+        filesScanned: fileChunks.length - skippedCount,
+        totalTokens,
+        violations: updatedFindings.reduce((sum, finding) => sum + finding.issues.length, 0),
+        critical: updatedFindings.filter((finding) => finding.severity === "P0_CRITICAL").length,
+        high: updatedFindings.filter((finding) => finding.severity === "P1_HIGH").length,
+        medium: updatedFindings.filter((finding) => finding.severity === "P2_MEDIUM").length,
+        lgtm: updatedFindings.filter((finding) => finding.severity === "LGTM").length,
+    };
 
-            const newDashboard = renderDashboard(newReport);
-            fs.writeFileSync(OUTPUT_FILE, newDashboard);
+    const newReport: DashboardReport = {
+        ...report,
+        metrics: newMetrics,
+        findings: updatedFindings,
+        status: determineStatus(newMetrics),
+        recommendedAction: generateRecommendation(newMetrics),
+    };
 
-            // Also update session file with new findings
-            fs.writeFileSync(SESSION_FILE, JSON.stringify({
+    fs.writeFileSync(OUTPUT_FILE, renderDashboard(newReport));
+    fs.writeFileSync(
+        SESSION_FILE,
+        JSON.stringify(
+            {
                 date: newReport.date,
                 findings: newReport.findings,
-                metrics: newReport.metrics
-            }, null, 2));
+                metrics: newReport.metrics,
+            },
+            null,
+            2,
+        ),
+    );
 
-            Logger.info(chalk.bold.green("📊 DASHBOARD UPDATED"));
-        }
-    }
+    Logger.info(chalk.bold.green("📊 DASHBOARD UPDATED"));
 }
 
-main().catch(console.error);
+main().catch((error) => {
+    Logger.error(error instanceof Error ? error.message : String(error));
+});

@@ -1,39 +1,46 @@
-# 🚀 J-Star Reviewer: Quick Start Guide
+# J-Star Reviewer: Quick Start Guide
 
-If you are running this in a new repo for the first time, here is the exact order of events.
+## 1. Install dependencies
 
-## 1. Installation
 ```bash
 pnpm install
 ```
 
-## 2. Configuration (The "Zero-Step")
-The tool now **auto-creates** these for you when you run any command, but you still need to fill in your keys.
+## 2. Add local keys
 
-1.  Look for `.env.example` (or create a copy named `.env.local`).
-2.  Add your API keys:
-    - `GEMINI_API_KEY`: Get one for free at [Google AI Studio](https://aistudio.google.com/).
-    - `GROQ_API_KEY`: Get one at [Groq Console](https://console.groq.com/).
+Create `.env.local` from `.env.example` and set:
+- `GEMINI_API_KEY`
+- `GROQ_API_KEY`
 
-## 3. Build the Brain (One-Time Setup)
-This scans your codebase and creates a local search index in `.jstar/`.
+## 3. Build the local index
+
 ```bash
 pnpm run index:init
 ```
 
-## 4. Run your first Review
-Stage some changes first!
+## 4. Run a review
+
+Stage changes first, then:
+
 ```bash
 git add .
 pnpm run review
 ```
 
----
+This produces:
+- `.jstar/last-review.md`
+- `.jstar/session.json`
 
-## 🛠️ Auto-Healing Features
-- **Missing `.jstar`?** We create it automatically.
-- **Outdated `.env.example`?** We append missing keys automatically.
-- **Forgot `.env.local`?** We'll remind you exactly what's missing.
+## 5. Run a security audit
 
-## 💡 Pro Tip
-Add the review command as a git hook or just run `jstar review` before you push.
+```bash
+pnpm run audit
+```
+
+This produces:
+- `.jstar/audit_report.md`
+- `.jstar/audit_report.json`
+
+## 6. Handle deterministic false positives
+
+Add narrow ignore entries to `.jstar/audit-ignore.json` when a rule is intentionally violated and understood.

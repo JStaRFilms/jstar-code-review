@@ -1,7 +1,6 @@
 node_modules
-.env
-.DS_Store
 dist
+.DS_Store
 
 # J-Star Index (The Brain)
 .jstar/
@@ -12,3 +11,7 @@ dist
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Secrets and keys
+*.pem
+*.key

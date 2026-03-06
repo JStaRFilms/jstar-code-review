@@ -7,6 +7,7 @@ import { Severity } from "./types";
 const REQUIRED_ENV_VARS = {
     'GEMINI_API_KEY': '# Required: Gemini API key (or GOOGLE_API_KEY)\nGEMINI_API_KEY=your_gemini_api_key_here',
     'GROQ_API_KEY': '# Required: Groq API key for LLM reviews\nGROQ_API_KEY=your_groq_api_key_here',
+    'GEMINI_EMBEDDING_MODEL': '# Optional: Override the embedding model\n# GEMINI_EMBEDDING_MODEL=gemini-embedding-001',
     'REVIEW_MODEL_NAME': '# Optional: Override the default model\n# REVIEW_MODEL_NAME=moonshotai/kimi-k2-instruct-0905'
 };
 

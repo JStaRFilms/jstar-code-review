@@ -4,6 +4,8 @@
  */
 
 export type Severity = 'P0_CRITICAL' | 'P1_HIGH' | 'P2_MEDIUM' | 'LGTM';
+export type AuditSeverity = 'CRITICAL' | 'HIGH' | 'WARNING' | 'INFO';
+export type AuditCategory = 'SECURITY' | 'LOGIC' | 'QUALITY' | 'GUARDRAIL';
 
 export interface ReviewIssue {
     title: string;
@@ -11,7 +13,9 @@ export interface ReviewIssue {
     line?: number;
     fixPrompt: string;
     confidenceScore?: number;
-    status?: 'resolved' | 'ignored';
+    ruleId?: string;
+    source?: 'llm' | 'deterministic';
+    status?: 'resolved' | 'ignored' | 'accepted';
 }
 
 export interface FileFinding {
@@ -34,6 +38,47 @@ export interface DashboardReport {
         lgtm: number;
     };
     findings: FileFinding[];
+    recommendedAction: string;
+}
+
+export interface AuditFinding {
+    ruleId: string;
+    title: string;
+    severity: AuditSeverity;
+    category: AuditCategory;
+    file: string;
+    line?: number;
+    message: string;
+    recommendation: string;
+    source: 'deterministic';
+    ignoreReason?: string;
+}
+
+export interface AuditIgnoreEntry {
+    ruleId: string;
+    file?: string;
+    line?: number;
+    reason?: string;
+}
+
+export interface AuditSummary {
+    filesScanned: number;
+    findings: number;
+    critical: number;
+    high: number;
+    warning: number;
+    info: number;
+    ignored: number;
+}
+
+export interface AuditReport {
+    date: string;
+    mode: string;
+    target: string;
+    rulesVersion: string;
+    summary: AuditSummary;
+    findings: AuditFinding[];
+    ignoredFindings: AuditFinding[];
     recommendedAction: string;
 }
 
