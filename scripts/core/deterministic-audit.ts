@@ -22,8 +22,8 @@ interface LineRule extends BaseRule {
 }
 
 interface FileRule extends BaseRule {
-    test: RegExp;
-    line?: number;
+    test: (content: string) => boolean;
+    line?: number | ((content: string) => number | undefined);
     message: string;
 }
 
@@ -39,6 +39,143 @@ export interface RunDeterministicAuditOptions {
     rootDir?: string;
     includeBuildFiles?: boolean;
     includeRepositoryChecks?: boolean;
+}
+
+interface StatementLine {
+    line: number;
+    text: string;
+}
+
+function readStringLiteral(source: string, start: number): { value: string; end: number } | null {
+    const quote = source[start];
+    if (quote !== '"' && quote !== "'") {
+        return null;
+    }
+
+    let value = "";
+
+    for (let index = start + 1; index < source.length; index++) {
+        const char = source[index];
+        if (char === "\r" || char === "\n") {
+            return null;
+        }
+
+        if (char === "\\") {
+            if (index + 1 >= source.length) {
+                return null;
+            }
+            value += source.slice(index, index + 2);
+            index++;
+            continue;
+        }
+
+        if (char === quote) {
+            return { value, end: index + 1 };
+        }
+
+        value += char;
+    }
+
+    return null;
+}
+
+function isStatementTerminated(source: string, index: number): boolean {
+    let cursor = index;
+
+    while (cursor < source.length) {
+        const char = source[cursor];
+        if (char === " " || char === "\t" || char === "\v" || char === "\f") {
+            cursor++;
+            continue;
+        }
+
+        if (char === ";") {
+            return true;
+        }
+
+        if (source.startsWith("//", cursor)) {
+            return true;
+        }
+
+        if (source.startsWith("/*", cursor)) {
+            const commentEnd = source.indexOf("*/", cursor + 2);
+            if (commentEnd === -1) {
+                return false;
+            }
+            cursor = commentEnd + 2;
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+function isUseClientDirectiveStatement(statement: string): boolean {
+    const directive = readStringLiteral(statement, 0);
+    return directive?.value === "use client" && isStatementTerminated(statement, directive.end);
+}
+
+function collectStatementLines(content: string): StatementLine[] {
+    const statements: StatementLine[] = [];
+    const lines = content.split(/\r?\n/);
+    let inBlockComment = false;
+
+    nextLine: for (let index = 0; index < lines.length; index++) {
+        const rawLine = lines[index];
+        const line = index === 0 ? rawLine.replace(/^\uFEFF/, "") : rawLine;
+        if (!inBlockComment && index === 0 && line.startsWith("#!")) {
+            continue;
+        }
+
+        let cursor = 0;
+
+        while (cursor < line.length) {
+            if (inBlockComment) {
+                const commentEnd = line.indexOf("*/", cursor);
+                if (commentEnd === -1) {
+                    continue nextLine;
+                }
+                inBlockComment = false;
+                cursor = commentEnd + 2;
+                continue;
+            }
+
+            const char = line[cursor];
+            if (char === " " || char === "\t" || char === "\v" || char === "\f") {
+                cursor++;
+                continue;
+            }
+
+            if (line.startsWith("//", cursor)) {
+                continue nextLine;
+            }
+
+            if (line.startsWith("/*", cursor)) {
+                inBlockComment = true;
+                cursor += 2;
+                continue;
+            }
+
+            statements.push({
+                line: index + 1,
+                text: line.slice(cursor),
+            });
+            continue nextLine;
+        }
+    }
+
+    return statements;
+}
+
+function hasUseClientAsFirstStatement(content: string): boolean {
+    const firstStatement = collectStatementLines(content)[0];
+    return firstStatement ? isUseClientDirectiveStatement(firstStatement.text) : false;
+}
+
+function findUseClientDirectiveLine(content: string): number | undefined {
+    return collectStatementLines(content).find((statement) => isUseClientDirectiveStatement(statement.text))?.line;
 }
 
 const LINE_RULES: LineRule[] = [
@@ -109,12 +246,12 @@ const FILE_RULES: FileRule[] = [
         title: '"use client" is not the first statement',
         severity: "HIGH",
         category: "LOGIC",
-        recommendation: 'Move the "use client" directive to the top of the module before imports or comments.',
+        recommendation: 'Move the "use client" directive above imports and executable statements so it stays the first statement in the module.',
         filePattern: /\.tsx?$/i,
         excludePattern: /(scripts|test)\//i,
-        test: /^(?!(?:\s*|(?:\/\/[^\n]*\n)|(?:\/\*[\s\S]*?\*\/))*['"]use client['"]).*['"]use client['"]/s,
-        message: 'Next.js requires "use client" to appear before any other statement in the file.',
-        line: 1,
+        test: (content) => Boolean(findUseClientDirectiveLine(content)) && !hasUseClientAsFirstStatement(content),
+        message: 'Next.js requires "use client" to be the first statement in the file.',
+        line: (content) => findUseClientDirectiveLine(content) ?? 1,
     },
 ];
 
@@ -128,7 +265,7 @@ const CUSTOM_RULES: CustomRule[] = [
         filePattern: /\.tsx?$/i,
         excludePattern: /(^|\/)(test|tests|fixtures?|mocks?|spec)\//i,
         scan: (content, normalizedPath) => {
-            if (!/^\s*['"]use client['"]/m.test(content)) {
+            if (!hasUseClientAsFirstStatement(content)) {
                 return [];
             }
 
@@ -270,17 +407,18 @@ export function scanFileContent(content: string, normalizedPath: string): AuditF
             continue;
         }
 
-        if (!rule.test.test(content)) {
+        if (!rule.test(content)) {
             continue;
         }
 
+        const line = typeof rule.line === "function" ? rule.line(content) : rule.line;
         findings.push({
             ruleId: rule.id,
             title: rule.title,
             severity: rule.severity,
             category: rule.category,
             file: normalizedPath,
-            line: rule.line,
+            line,
             message: rule.message,
             recommendation: rule.recommendation,
             source: "deterministic",
