@@ -131,7 +131,7 @@ interface FlatIssue {
     description: string;
     file: string;
     confidenceScore?: number;
-    status?: 'resolved' | 'ignored';
+    status?: 'resolved' | 'ignored' | 'accepted';
     fileIndex: number;
     issueIndex: number;
 }

@@ -1,14 +1,18 @@
 node_modules
-.env
-.DS_Store
 dist
+.DS_Store
 
 # J-Star Index (The Brain)
 .jstar/
 
 # Environment
+# Keep local env files ignored; GUARD-003 separately checks for any sensitive files that are already tracked.
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Secrets and keys
+*.pem
+*.key

@@ -28,10 +28,6 @@ function getStatusEmoji(status: DashboardReport['status']): string {
     }
 }
 
-function formatDate(): string {
-    return new Date().toISOString().split('T')[0];
-}
-
 /**
  * Renders a single issue row for the markdown table.
  * Includes fallback handling for unexpected severity values to ensure
@@ -98,7 +94,7 @@ export function renderDashboard(report: DashboardReport): string {
 
     let md = `# 📊 J-STAR CODE REVIEW DASHBOARD
 
-**Date:** \`${formatDate()}\` | **Reviewer:** \`Detective Engine & Judge\` | **Status:** ${getStatusEmoji(status)} **${status.replace('_', ' ')}**
+**Date:** \`${report.date}\` | **Reviewer:** \`${report.reviewer}\` | **Status:** ${getStatusEmoji(status)} **${status.replace('_', ' ')}**
 
 ---
 

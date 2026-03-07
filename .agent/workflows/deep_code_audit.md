@@ -1,79 +1,49 @@
 ---
-description: Perform a meticulous, manual deep code audit covering Security, Logic, Completeness, and Quality.
+description: Run the deterministic J-Star security audit and use the report as the primary audit artifact.
 ---
 
 # Deep Code Audit Protocol
 
-## Phase 0: Scope Definition
-**Objective:** Define the boundaries of the audit.
-1. **Determine Scope:**
-   - **FULL_SCAN**: Audit the entire codebase.
-   - **FEATURE_SCAN**: Audit a specific feature (look for `docs/features/[FeatureName].md`).
-   - **DIFF_SCAN**: Audit `git diff --staged` or `git diff HEAD~1`.
+## Primary command
 
-## Phase 1: The Detective (Static Analysis)
-**Objective:** Hard facts and red flags.
+Run the audit first instead of treating the audit as a manual grep exercise.
 
-2. **Detect Package Manager & Audit**
-   - Check lockfiles (`pnpm-lock.yaml`, `package-lock.json`, etc.).
-   - Run `[manager] audit` (Critical/High).
+```bash
+jstar audit
+```
 
-3. **Secret & Risk Scanning (Grep or Detective)**
-   - **Recommended:** Run `jstar detect` (if installed) to perform static analysis.
-   - **Manual Fallback:** `grep_search` patterns:
-     - **Secrets:** `(api_key|secret|password|token)\s*[:=]\s*['"\`][a-zA-Z0-9_\-\.]{10,}['"\`]`
-     - **RCE/Injection:** `(dangerouslySetInnerHTML|eval\(|exec\(|\.queryRaw)`
-     - **Debugging:** `(console\.log|debugger|todo)`
+This writes:
+- `.jstar/audit_report.md`
+- `.jstar/audit_report.json`
 
-## Phase 2: The Graph (Relational Analysis)
-**Objective:** Trace data flow and impact.
+## Scope options
 
-4. **Entry Point Analysis**
-   - Identify Entry Points (Routes, Actions, CLI Commands) relevant to the Scope.
-   - **Trace Input:** Follow user input -> Service -> Database.
-   - **Verify Validation:** Ensure Zod/Typebox validation exists at the *edge*.
+### Full workspace
+```bash
+jstar audit
+```
 
-## Phase 3: The Auditor (Spec vs Code)
-**Objective:** Completeness check.
+### Focused path
+```bash
+jstar audit --path src
+```
 
-5. **Documentation Comparison**
-   - Read specific `docs/features/*.md` relevant to the scope.
-   - **Gap Analysis:** List features present in Docs but missing in Code.
-   - **Orphan Analysis:** List code that exists but isn't mentioned in Docs (Zombie code).
+### Change-based audit
+```bash
+jstar audit --last
+jstar audit --pr
+```
 
-## Phase 4: The Judge (Deep Logic Audit)
-**Objective:** Mental Sandboxing.
+## Agent workflow
 
-6. **Logic Probing**
-   - Pick the most complex High-Risk file.
-   - **Simulate Attacks:** "What if I send `null`? Empty string? Negative ID?"
-   - **Race Conditions:** "What if two requests hit this at once?"
-   - **Auth Bypass:** "Can I access this Service function directly?"
+1. Run `jstar audit --json` when you need machine-readable output.
+2. Fix `CRITICAL` and `HIGH` findings first.
+3. Re-run the same audit scope to confirm the finding is gone.
+4. If a deterministic finding is a false positive, add a narrow entry to `.jstar/audit-ignore.json`.
+5. Use `jstar review --json` after the security pass when you also want LLM-backed code review on the same change set.
 
-## Phase 5: The Architect (Code Quality)
-**Objective:** Maintainability and Standards.
+## Rules of engagement
 
-7. **Quality Checks**
-   - **Performance:** Look for `await` in loops (N+1).
-   - **Bloat:** Files > 200 lines? Functions > 50 lines?
-   - **Types:** any Usage of `any` or `as unknown`?
-   - **Structure:** Does it follow FSD (Feature-Sliced Design)?
-
-## Phase 6: Reporting
-**Objective:** Structured Output.
-
-8. **Generate Report**
-   - Create `.jstar/audit_report.md`.
-   - Table Columns: `[Severity] [Category] [Location] [Issue] [Recommendation]`
-   - Severities: `CRITICAL`, `HIGH`, `WARNING`, `INFO`.
-   - Categories: `SECURITY`, `LOGIC`, `COMPLETENESS`, `QUALITY`.
-
-## Phase 7: Remediation & Verification
-**Objective:** Fix and Prove.
-
-9. **Fix & Verify Loop**
-   - For each CRITICAL/HIGH issue:
-     - Implement Fix.
-     - **Verify:** Run build/tests.
-     - **Re-Verify:** Run the specific check (Grep/Logic) to confirm the fix.
-     - Git Add.
+- Do not broaden an ignore entry more than necessary.
+- Prefer fixing the code over ignoring a rule.
+- Treat tracked `.env`, `.pem`, and `.key` files as blockers until rotated or removed from history.

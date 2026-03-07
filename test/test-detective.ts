@@ -1,140 +1,173 @@
-// test/test-detective.ts
-// Local test script to verify the Detective Engine works correctly
-// Usage: npx tsx test/test-detective.ts
+import assert from "node:assert/strict";
+import * as fs from "fs";
+import * as path from "path";
+import { scanFileContent } from "../scripts/core/deterministic-audit";
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { analyzeFile } from '../src/core/analysis/index.js';
-
-const FIXTURES_DIR = path.join(process.cwd(), 'test', 'fixtures');
+const FIXTURES_DIR = path.join(process.cwd(), "test", "fixtures");
 
 interface TestCase {
-    file: string;
-    expectedViolations: string[];
-    description: string;
+    fixture?: string;
+    name?: string;
+    content?: string;
+    normalizedPath: string;
+    expectedRuleIds: string[];
 }
 
 const TEST_CASES: TestCase[] = [
-    // === ORIGINAL RULES ===
     {
-        file: 'server-with-hook.tsx',
-        expectedViolations: ['CLIENT_HOOK_IN_SERVER'],  // File in app/ without "use client" = Server Component
-        description: 'Server Component using useState/useEffect (invalid)',
+        fixture: "secret-leak.tsx",
+        normalizedPath: "app/secret-leak.tsx",
+        expectedRuleIds: ["SEC-005"],
     },
     {
-        file: 'client-with-server-import.tsx',
-        expectedViolations: ['SERVER_ONLY_IN_CLIENT'],
-        description: 'Client Component importing next/headers',
+        fixture: "dangerous-html.tsx",
+        normalizedPath: "app/dangerous-html.tsx",
+        expectedRuleIds: ["SEC-004"],
     },
     {
-        file: 'route-with-default-export.ts',
-        expectedViolations: ['WRONG_EXPORT_PATTERN'],
-        description: 'Route Handler using export default',
+        fixture: "unsafe-query.ts",
+        normalizedPath: "src/data/unsafe-query.ts",
+        expectedRuleIds: ["SEC-003"],
     },
     {
-        file: 'valid-client-component.tsx',
-        expectedViolations: [],
-        description: 'Valid Client Component (no violations)',
-    },
-    // === GOD MODE RULES ===
-    {
-        file: 'floating-promise.ts',
-        expectedViolations: ['FLOATING_PROMISE'],
-        description: 'Async call without await/return (floating promise)',
+        name: "standalone api key assignment",
+        content: ['const apiKey = "abc123def456";', ""].join("\n"),
+        normalizedPath: "src/standalone-secret.ts",
+        expectedRuleIds: ["SEC-001"],
     },
     {
-        file: 'n-plus-one.ts',
-        expectedViolations: ['N_PLUS_ONE_WATERFALL'],
-        description: 'Database call inside loop/map (N+1 query)',
+        name: "api version string does not trigger secret rule",
+        content: ['const apiVersion = "my-service-v1";', ""].join("\n"),
+        normalizedPath: "src/non-secret-version.ts",
+        expectedRuleIds: [],
     },
     {
-        file: 'toxic-args.tsx',
-        expectedViolations: ['TOXIC_SERVER_ACTION_ARG'],
-        description: 'Non-serializable args (Date/Map) in client component',
+        name: "commented fake secret does not trigger secret rule",
+        content: ['// token = "aaaaaaaaaa";', ""].join("\n"),
+        normalizedPath: "src/commented-secret.ts",
+        expectedRuleIds: [],
     },
     {
-        file: 'secret-leak.tsx',
-        expectedViolations: ['SECRET_LEAK_CLIENT'],
-        description: 'Non-NEXT_PUBLIC env var in client component',
+        name: "sample secret inside a string literal does not trigger secret rule",
+        content: ['const docs = "apiKey = \\"abc123def4567890\\"";', ""].join("\n"),
+        normalizedPath: "src/stringified-secret-example.ts",
+        expectedRuleIds: [],
     },
     {
-        file: 'redirect-try-catch.ts',
-        expectedViolations: ['REDIRECT_IN_TRY_CATCH'],
-        description: 'redirect() inside try-catch block',
+        name: "commented eval call does not trigger dynamic execution rule",
+        content: ["// eval(userInput)", ""].join("\n"),
+        normalizedPath: "src/commented-eval.ts",
+        expectedRuleIds: [],
+    },
+    {
+        name: "dangerous html text inside string literal does not trigger sink rule",
+        content: ['const docs = "dangerouslySetInnerHTML={{ __html: value }}";', ""].join("\n"),
+        normalizedPath: "app/stringified-dangerous-html.tsx",
+        expectedRuleIds: [],
+    },
+    {
+        fixture: "misplaced-use-client.tsx",
+        normalizedPath: "app/misplaced-use-client.tsx",
+        expectedRuleIds: ["ARCH-001"],
+    },
+    {
+        fixture: "valid-client-component.tsx",
+        normalizedPath: "app/valid-client-component.tsx",
+        expectedRuleIds: [],
+    },
+    {
+        name: "inline block comment before use client",
+        content: ['/* Banner comment */ "use client";', "", "export const value = 1;", ""].join("\n"),
+        normalizedPath: "app/commented-client-component.tsx",
+        expectedRuleIds: [],
+    },
+    {
+        name: "shebang before use client",
+        content: ['#!/usr/bin/env node', '"use client";', "", "export const value = 1;", ""].join("\n"),
+        normalizedPath: "app/shebang-client-component.ts",
+        expectedRuleIds: [],
+    },
+    {
+        name: "commented client file still triggers env leak rule",
+        content: [
+            "/* Multi-line",
+            " * header comment",
+            " */",
+            '"use client";',
+            "",
+            "export const secret = process.env.INTERNAL_TOKEN;",
+            "",
+        ].join("\n"),
+        normalizedPath: "app/commented-secret-leak.tsx",
+        expectedRuleIds: ["SEC-005"],
+    },
+    {
+        name: "commented env reference in client file stays inert",
+        content: [
+            '"use client";',
+            "",
+            "// process.env.INTERNAL_TOKEN",
+            "",
+        ].join("\n"),
+        normalizedPath: "app/commented-env-reference.tsx",
+        expectedRuleIds: [],
+    },
+    {
+        name: "unclosed block comment keeps remaining lines inert",
+        content: [
+            "/* unclosed comment",
+            '"use client";',
+            "export const secret = process.env.INTERNAL_TOKEN;",
+            "",
+        ].join("\n"),
+        normalizedPath: "app/unclosed-comment.tsx",
+        expectedRuleIds: [],
     },
 ];
 
-console.log('═══════════════════════════════════════════════════════════');
-console.log('  🔍 DETECTIVE ENGINE TEST SUITE');
-console.log('═══════════════════════════════════════════════════════════\n');
-
 let passed = 0;
-let failed = 0;
 
 for (const testCase of TEST_CASES) {
-    const filePath = path.join(FIXTURES_DIR, testCase.file);
+    const content =
+        testCase.content ??
+        fs.readFileSync(path.join(FIXTURES_DIR, testCase.fixture ?? ""), "utf-8");
+    const findings = scanFileContent(content, testCase.normalizedPath);
+    const foundRuleIds = findings.map((finding) => finding.ruleId);
+    const label = testCase.name ?? testCase.fixture ?? testCase.normalizedPath;
 
-    if (!fs.existsSync(filePath)) {
-        console.log(`❌ SKIP: ${testCase.file} (file not found)`);
-        failed++;
-        continue;
-    }
+    assert.deepEqual(
+        [...new Set(foundRuleIds)].sort(),
+        [...new Set(testCase.expectedRuleIds)].sort(),
+        `Unexpected rule set for ${label}`,
+    );
 
-    const code = fs.readFileSync(filePath, 'utf-8');
-    // Use app/ prefix for route handler to trigger the route detection
-    const analysisPath = testCase.file === 'route-with-default-export.ts'
-        ? 'app/api/test/route.ts'
-        : `app/${testCase.file}`;
-    const report = analyzeFile(code, analysisPath);
-
-    const foundCodes = report.violations.map(v => v.code);
-    const allExpectedFound = testCase.expectedViolations.every(exp => foundCodes.includes(exp as any));
-    const noUnexpected = testCase.expectedViolations.length === 0
-        ? report.violations.length === 0
-        : true;
-
-    const success = allExpectedFound && noUnexpected;
-
-    if (success) {
-        console.log(`✅ PASS: ${testCase.file}`);
-        console.log(`   ${testCase.description}`);
-        if (report.violations.length > 0) {
-            report.violations.forEach(v => {
-                console.log(`   → Line ${v.line}: [${v.code}] ${v.symbol}`);
-            });
-        } else {
-            console.log(`   → No violations (as expected)`);
-        }
-        passed++;
-    } else {
-        console.log(`❌ FAIL: ${testCase.file}`);
-        console.log(`   Expected: ${testCase.expectedViolations.join(', ') || 'none'}`);
-        console.log(`   Found: ${foundCodes.join(', ') || 'none'}`);
-        failed++;
-    }
-    console.log('');
+    passed++;
 }
 
-console.log('═══════════════════════════════════════════════════════════');
-console.log(`  RESULTS: ${passed} passed, ${failed} failed`);
-console.log('═══════════════════════════════════════════════════════════\n');
+const misplacedUseClient = fs.readFileSync(path.join(FIXTURES_DIR, "misplaced-use-client.tsx"), "utf-8");
+const misplacedFinding = scanFileContent(misplacedUseClient, "app/misplaced-use-client.tsx").find(
+    (finding) => finding.ruleId === "ARCH-001",
+);
+assert.equal(misplacedFinding?.line, 3, 'ARCH-001 should point at the misplaced "use client" directive line');
 
-// Determinism test: Run 5 times, output should be identical
-console.log('🔄 DETERMINISM TEST (5 runs)...');
-const deterministicFile = path.join(FIXTURES_DIR, 'server-with-hook.tsx');
-const deterministicCode = fs.readFileSync(deterministicFile, 'utf-8');
+const commentedClientLeak = scanFileContent(
+    [
+        "/* Multi-line",
+        " * header comment",
+        " */",
+        '"use client";',
+        "",
+        "export const secret = process.env.INTERNAL_TOKEN;",
+        "",
+    ].join("\n"),
+    "app/commented-secret-leak.tsx",
+).find((finding) => finding.ruleId === "SEC-005");
+assert.equal(commentedClientLeak?.line, 6, "SEC-005 should point at the original source line");
 
-const results: string[] = [];
-for (let i = 0; i < 5; i++) {
-    const report = analyzeFile(deterministicCode, 'app/test.tsx');
-    results.push(JSON.stringify(report));
-}
+const deterministicFixture = fs.readFileSync(path.join(FIXTURES_DIR, "secret-leak.tsx"), "utf-8");
+const outputs = Array.from({ length: 5 }, () =>
+    JSON.stringify(scanFileContent(deterministicFixture, "app/secret-leak.tsx")),
+);
+assert(outputs.every((output) => output === outputs[0]), "scanFileContent should be deterministic across runs");
 
-const allIdentical = results.every(r => r === results[0]);
-if (allIdentical) {
-    console.log('✅ DETERMINISM PASS: All 5 runs produced identical output');
-} else {
-    console.log('❌ DETERMINISM FAIL: Outputs differ between runs');
-}
-
-process.exit(failed > 0 ? 1 : 0);
+console.log(`Detective tests passed: ${passed} cases + determinism check.`);

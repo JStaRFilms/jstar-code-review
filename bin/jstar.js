@@ -29,7 +29,7 @@ function log(msg) {
 
 function printHelp() {
     log(`
-${COLORS.bold}🌟 J-Star Reviewer v2.4.4${COLORS.reset}
+${COLORS.bold}🌟 J-Star Reviewer v3.0.1${COLORS.reset}
 
 ${COLORS.dim}AI-powered code review with local embeddings${COLORS.reset}
 
@@ -39,6 +39,7 @@ ${COLORS.bold}USAGE:${COLORS.reset}
 ${COLORS.bold}COMMANDS:${COLORS.reset}
   ${COLORS.green}init${COLORS.reset}      Index the current codebase (build the brain)
   ${COLORS.green}review${COLORS.reset}    Review staged git changes
+  ${COLORS.green}audit${COLORS.reset}     Run deterministic security audit checks
   ${COLORS.green}chat${COLORS.reset}      Resume an interactive session from the last review
   ${COLORS.green}detect${COLORS.reset}    Run static analysis (Detective Engine)
   ${COLORS.green}setup${COLORS.reset}     Create .env.example and .jstar/ in current directory
@@ -47,6 +48,7 @@ ${COLORS.bold}OPTIONS:${COLORS.reset}
   ${COLORS.yellow}--json${COLORS.reset}      Output machine-readable JSON (for CI/CD)
   ${COLORS.yellow}--headless${COLORS.reset}  Enable stdin/stdout protocol (for AI agents)
   ${COLORS.yellow}--all${COLORS.reset}       Scan all files (including build artifacts like .next) in 'detect' mode
+  ${COLORS.yellow}--full${COLORS.reset}      For 'audit', scan the full workspace (default)
 
 ${COLORS.bold}REVIEW OPTIONS:${COLORS.reset}
   ${COLORS.yellow}--pr${COLORS.reset}        Review a Pull Request (compare against main/base)
@@ -61,6 +63,9 @@ ${COLORS.bold}EXAMPLES:${COLORS.reset}
 
   ${COLORS.dim}# Review staged changes (default)${COLORS.reset}
   jstar review
+
+  ${COLORS.dim}# Run a full deterministic security audit${COLORS.reset}
+  jstar audit
 
   ${COLORS.dim}# Review a Pull Request${COLORS.reset}
   jstar review --pr
@@ -160,6 +165,7 @@ function runScript(scriptName) {
 const REQUIRED_ENV_VARS = {
     'GEMINI_API_KEY': '# Required: Gemini API key (or GOOGLE_API_KEY)\nGEMINI_API_KEY=your_gemini_api_key_here',
     'GROQ_API_KEY': '# Required: Groq API key for LLM reviews\nGROQ_API_KEY=your_groq_api_key_here',
+    'GEMINI_EMBEDDING_MODEL': '# Optional: Override the embedding model\n# GEMINI_EMBEDDING_MODEL=gemini-embedding-001',
     'REVIEW_MODEL_NAME': '# Optional: Override the default model\n# REVIEW_MODEL_NAME=moonshotai/kimi-k2-instruct-0905'
 };
 
@@ -236,6 +242,9 @@ switch (command) {
         break;
     case 'review':
         runScript('reviewer.ts');
+        break;
+    case 'audit':
+        runScript('audit.ts');
         break;
     case 'chat':
         runScript('chat.ts');
