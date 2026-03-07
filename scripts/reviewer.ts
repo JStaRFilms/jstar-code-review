@@ -19,6 +19,7 @@ import { renderDashboard, determineStatus, generateRecommendation } from "./dash
 import { startInteractiveSession } from "./session";
 import { critiqueFindings } from "./core/critique";
 import { mapAuditSeverityToReviewSeverity, runDeterministicAudit } from "./core/deterministic-audit";
+import { mergeFindings, severityMax } from "./core/review-findings";
 import { chunkDiffByFile, extractDiffFileNames, resolveReviewTarget } from "./core/review-target";
 import { shouldSkipReviewFile } from "./core/project";
 
@@ -41,13 +42,6 @@ const MODEL_NAME = Config.MODEL_NAME;
 const MAX_TOKENS_PER_REQUEST = 8000;
 const CHARS_PER_TOKEN = 4;
 const DELAY_BETWEEN_CHUNKS_MS = 2000;
-
-const SEVERITY_RANK: Record<Severity, number> = {
-    P0_CRITICAL: 0,
-    P1_HIGH: 1,
-    P2_MEDIUM: 2,
-    LGTM: 3,
-};
 
 function estimateTokens(text: string): number {
     return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -123,10 +117,6 @@ function parseReviewResponse(text: string): LLMReviewResponse {
     };
 }
 
-function severityMax(left: Severity, right: Severity): Severity {
-    return SEVERITY_RANK[left] <= SEVERITY_RANK[right] ? left : right;
-}
-
 function groupDeterministicFindings(findings: Awaited<ReturnType<typeof runDeterministicAudit>>["findings"]): FileFinding[] {
     const grouped = new Map<string, FileFinding>();
 
@@ -157,40 +147,6 @@ function groupDeterministicFindings(findings: Awaited<ReturnType<typeof runDeter
     });
 
     return [...grouped.values()].sort((left, right) => left.file.localeCompare(right.file));
-}
-
-function mergeFindings(primary: FileFinding[], secondary: FileFinding[]): FileFinding[] {
-    const grouped = new Map<string, FileFinding>();
-
-    const insert = (finding: FileFinding) => {
-        const existing = grouped.get(finding.file);
-        if (!existing) {
-            grouped.set(finding.file, {
-                ...finding,
-                issues: [...finding.issues],
-            });
-            return;
-        }
-
-        existing.severity = severityMax(existing.severity, finding.severity);
-        existing.issues.push(...finding.issues);
-    };
-
-    primary.forEach(insert);
-    secondary.forEach(insert);
-
-    return [...grouped.values()]
-        .map((finding) => ({
-            ...finding,
-            issues: finding.issues.sort((left, right) => {
-                const lineDelta = (left.line ?? 0) - (right.line ?? 0);
-                if (lineDelta !== 0) {
-                    return lineDelta;
-                }
-                return left.title.localeCompare(right.title);
-            }),
-        }))
-        .sort((left, right) => left.file.localeCompare(right.file));
 }
 
 function logDeterministicSummary(report: Awaited<ReturnType<typeof runDeterministicAudit>>) {

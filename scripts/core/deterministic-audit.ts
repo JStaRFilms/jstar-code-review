@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import simpleGit from "simple-git";
 import { AuditCategory, AuditFinding, AuditIgnoreEntry, AuditReport, AuditSeverity } from "../types";
+import { Logger } from "../utils/logger";
 import { isCodeFile, normalizeRelativePath, walkProjectFiles } from "./project";
 
 export const RULES_VERSION = "security-audit-v1";
@@ -185,7 +186,7 @@ const LINE_RULES: LineRule[] = [
         severity: "CRITICAL",
         category: "SECURITY",
         recommendation: "Move the credential to environment configuration and rotate the exposed secret.",
-        pattern: /(api[_-]?key|secret|password|token)\s*[:=]\s*['"`][A-Za-z0-9._-]{10,}['"`]/i,
+        pattern: /(?:^|[^A-Za-z0-9_])(?:api[_-]?key|password|(?:access|auth|bearer|client|refresh|session)?[_-]?(?:secret|token))\s*[:=]\s*['"`][A-Za-z0-9._-]{10,}['"`]/i,
         excludePattern: /(^|\/)(test|tests|fixtures?|mocks?|spec)\//i,
         buildMessage: () => "Possible hardcoded credential detected in source.",
     },
@@ -561,6 +562,7 @@ async function runRepositoryChecks(cwd: string): Promise<AuditFinding[]> {
             });
         });
     } catch {
+        Logger.warn("Repository checks skipped: unable to access git metadata.");
         // Repository checks are best-effort outside git worktrees.
     }
 

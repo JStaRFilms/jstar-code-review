@@ -30,6 +30,18 @@ const TEST_CASES: TestCase[] = [
         expectedRuleIds: ["SEC-003"],
     },
     {
+        name: "standalone api key assignment",
+        content: ['const apiKey = "abc123def456";', ""].join("\n"),
+        normalizedPath: "src/standalone-secret.ts",
+        expectedRuleIds: ["SEC-001"],
+    },
+    {
+        name: "api version string does not trigger secret rule",
+        content: ['const apiVersion = "my-service-v1";', ""].join("\n"),
+        normalizedPath: "src/non-secret-version.ts",
+        expectedRuleIds: [],
+    },
+    {
         fixture: "misplaced-use-client.tsx",
         normalizedPath: "app/misplaced-use-client.tsx",
         expectedRuleIds: ["ARCH-001"],

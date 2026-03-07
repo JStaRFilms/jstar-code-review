@@ -13,7 +13,7 @@
     "audit": "ts-node scripts/audit.ts",
     "chat": "ts-node scripts/chat.ts",
     "detect": "ts-node scripts/detective.ts",
-    "test": "node -r ts-node/register test/test-detective.ts && node -r ts-node/register test/test-audit.ts",
+    "test": "node -r ts-node/register test/test-detective.ts && node -r ts-node/register test/test-review-findings.ts && node -r ts-node/register test/test-audit.ts",
     "prepare": "husky install"
   },
   "keywords": [
