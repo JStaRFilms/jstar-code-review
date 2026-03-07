@@ -42,6 +42,30 @@ const TEST_CASES: TestCase[] = [
         expectedRuleIds: [],
     },
     {
+        name: "commented fake secret does not trigger secret rule",
+        content: ['// token = "aaaaaaaaaa";', ""].join("\n"),
+        normalizedPath: "src/commented-secret.ts",
+        expectedRuleIds: [],
+    },
+    {
+        name: "sample secret inside a string literal does not trigger secret rule",
+        content: ['const docs = "apiKey = \\"abc123def4567890\\"";', ""].join("\n"),
+        normalizedPath: "src/stringified-secret-example.ts",
+        expectedRuleIds: [],
+    },
+    {
+        name: "commented eval call does not trigger dynamic execution rule",
+        content: ["// eval(userInput)", ""].join("\n"),
+        normalizedPath: "src/commented-eval.ts",
+        expectedRuleIds: [],
+    },
+    {
+        name: "dangerous html text inside string literal does not trigger sink rule",
+        content: ['const docs = "dangerouslySetInnerHTML={{ __html: value }}";', ""].join("\n"),
+        normalizedPath: "app/stringified-dangerous-html.tsx",
+        expectedRuleIds: [],
+    },
+    {
         fixture: "misplaced-use-client.tsx",
         normalizedPath: "app/misplaced-use-client.tsx",
         expectedRuleIds: ["ARCH-001"],
@@ -76,6 +100,17 @@ const TEST_CASES: TestCase[] = [
         ].join("\n"),
         normalizedPath: "app/commented-secret-leak.tsx",
         expectedRuleIds: ["SEC-005"],
+    },
+    {
+        name: "commented env reference in client file stays inert",
+        content: [
+            '"use client";',
+            "",
+            "// process.env.INTERNAL_TOKEN",
+            "",
+        ].join("\n"),
+        normalizedPath: "app/commented-env-reference.tsx",
+        expectedRuleIds: [],
     },
     {
         name: "unclosed block comment keeps remaining lines inert",

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import simpleGit from "simple-git";
+import ts from "typescript";
 import { AuditCategory, AuditFinding, AuditIgnoreEntry, AuditReport, AuditSeverity } from "../types";
 import { Logger } from "../utils/logger";
 import { isCodeFile, normalizeRelativePath, walkProjectFiles } from "./project";
@@ -20,6 +21,7 @@ interface BaseRule {
 interface LineRule extends BaseRule {
     pattern: RegExp;
     buildMessage?: (line: string) => string;
+    sourceView?: "raw" | "code";
 }
 
 interface FileRule extends BaseRule {
@@ -43,6 +45,12 @@ export interface RunDeterministicAuditOptions {
 }
 
 interface StatementLine {
+    line: number;
+    text: string;
+}
+
+interface SignificantToken {
+    kind: ts.SyntaxKind;
     line: number;
     text: string;
 }
@@ -179,17 +187,175 @@ function findUseClientDirectiveLine(content: string): number | undefined {
     return collectStatementLines(content).find((statement) => isUseClientDirectiveStatement(statement.text))?.line;
 }
 
+function getLanguageVariant(normalizedPath: string): ts.LanguageVariant {
+    return /\.(?:[jt]sx)$/i.test(normalizedPath) ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard;
+}
+
+function getScriptKind(normalizedPath: string): ts.ScriptKind {
+    if (/\.tsx$/i.test(normalizedPath)) {
+        return ts.ScriptKind.TSX;
+    }
+    if (/\.jsx$/i.test(normalizedPath)) {
+        return ts.ScriptKind.JSX;
+    }
+    if (/\.js$/i.test(normalizedPath)) {
+        return ts.ScriptKind.JS;
+    }
+    return ts.ScriptKind.TS;
+}
+
+function maskTriviaText(text: string): string {
+    return text.replace(/[^\r\n]/g, " ");
+}
+
+function shouldMaskInCodeView(kind: ts.SyntaxKind): boolean {
+    return (
+        kind === ts.SyntaxKind.SingleLineCommentTrivia ||
+        kind === ts.SyntaxKind.MultiLineCommentTrivia ||
+        kind === ts.SyntaxKind.ShebangTrivia ||
+        kind === ts.SyntaxKind.StringLiteral ||
+        kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral ||
+        kind === ts.SyntaxKind.TemplateHead ||
+        kind === ts.SyntaxKind.TemplateMiddle ||
+        kind === ts.SyntaxKind.TemplateTail ||
+        kind === ts.SyntaxKind.JsxText ||
+        kind === ts.SyntaxKind.JsxTextAllWhiteSpaces ||
+        kind === ts.SyntaxKind.RegularExpressionLiteral
+    );
+}
+
+function buildCodeView(content: string, normalizedPath: string): string {
+    const scanner = ts.createScanner(
+        ts.ScriptTarget.Latest,
+        false,
+        getLanguageVariant(normalizedPath),
+        content,
+    );
+
+    let masked = "";
+    let cursor = 0;
+
+    for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+        const tokenStart = scanner.getTokenPos();
+        const tokenEnd = scanner.getTextPos();
+        const tokenText = scanner.getTokenText();
+
+        if (tokenStart > cursor) {
+            masked += content.slice(cursor, tokenStart);
+        }
+
+        masked += shouldMaskInCodeView(token) ? maskTriviaText(tokenText) : tokenText;
+        cursor = tokenEnd;
+    }
+
+    if (cursor < content.length) {
+        masked += content.slice(cursor);
+    }
+
+    return masked;
+}
+
+function isTriviaToken(kind: ts.SyntaxKind): boolean {
+    return (
+        kind === ts.SyntaxKind.SingleLineCommentTrivia ||
+        kind === ts.SyntaxKind.MultiLineCommentTrivia ||
+        kind === ts.SyntaxKind.NewLineTrivia ||
+        kind === ts.SyntaxKind.WhitespaceTrivia ||
+        kind === ts.SyntaxKind.ShebangTrivia
+    );
+}
+
+function collectSignificantTokens(content: string, normalizedPath: string): SignificantToken[] {
+    const sourceFile = ts.createSourceFile(
+        normalizedPath,
+        content,
+        ts.ScriptTarget.Latest,
+        false,
+        getScriptKind(normalizedPath),
+    );
+    const scanner = ts.createScanner(
+        ts.ScriptTarget.Latest,
+        false,
+        getLanguageVariant(normalizedPath),
+        content,
+    );
+    const tokens: SignificantToken[] = [];
+
+    for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+        if (isTriviaToken(kind)) {
+            continue;
+        }
+
+        tokens.push({
+            kind,
+            line: ts.getLineAndCharacterOfPosition(sourceFile, scanner.getTokenPos()).line + 1,
+            text: scanner.getTokenText(),
+        });
+    }
+
+    return tokens;
+}
+
+const SECRET_NAME_PATTERN = /^(?:api[_-]?key|password|(?:access|auth|bearer|client|refresh|session)?[_-]?(?:secret|token))$/i;
+
+function normalizeTokenName(token: SignificantToken): string | null {
+    if (token.kind === ts.SyntaxKind.Identifier) {
+        return token.text;
+    }
+
+    if (token.kind === ts.SyntaxKind.StringLiteral) {
+        return token.text.slice(1, -1);
+    }
+
+    return null;
+}
+
+function readStringTokenValue(token: SignificantToken): string | null {
+    if (token.kind === ts.SyntaxKind.StringLiteral || token.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
+        return token.text.slice(1, -1);
+    }
+
+    return null;
+}
+
+function scanHardcodedSecrets(content: string, normalizedPath: string): AuditFinding[] {
+    const findings: AuditFinding[] = [];
+    const tokens = collectSignificantTokens(content, normalizedPath);
+
+    for (let index = 0; index < tokens.length - 2; index++) {
+        const token = tokens[index];
+        const candidateName = normalizeTokenName(token);
+        if (!candidateName || !SECRET_NAME_PATTERN.test(candidateName)) {
+            continue;
+        }
+
+        const operator = tokens[index + 1];
+        if (operator.kind !== ts.SyntaxKind.EqualsToken && operator.kind !== ts.SyntaxKind.ColonToken) {
+            continue;
+        }
+
+        const value = readStringTokenValue(tokens[index + 2]);
+        if (!value || value.length < 10) {
+            continue;
+        }
+
+        findings.push({
+            ruleId: "SEC-001",
+            title: "Hardcoded secret in source",
+            severity: "CRITICAL",
+            category: "SECURITY",
+            file: normalizedPath,
+            line: token.line,
+            message: "Possible hardcoded credential detected in source.",
+            recommendation: "Move the credential to environment configuration and rotate the exposed secret.",
+            source: "deterministic",
+        });
+    }
+
+    return findings;
+}
+
 const LINE_RULES: LineRule[] = [
-    {
-        id: "SEC-001",
-        title: "Hardcoded secret in source",
-        severity: "CRITICAL",
-        category: "SECURITY",
-        recommendation: "Move the credential to environment configuration and rotate the exposed secret.",
-        pattern: /(?:^|[^A-Za-z0-9_])(?:api[_-]?key|password|(?:access|auth|bearer|client|refresh|session)?[_-]?(?:secret|token))\s*[:=]\s*['"`][A-Za-z0-9._-]{10,}['"`]/i,
-        excludePattern: /(^|\/)(test|tests|fixtures?|mocks?|spec)\//i,
-        buildMessage: () => "Possible hardcoded credential detected in source.",
-    },
     {
         id: "SEC-002",
         title: "Dynamic code execution",
@@ -199,6 +365,7 @@ const LINE_RULES: LineRule[] = [
         pattern: /\b(?:eval|Function)\s*\(/,
         excludePattern: /(^|\/)(test|tests|fixtures?|mocks?|spec)\//i,
         buildMessage: () => "Dynamic code execution can allow arbitrary code paths and should be avoided.",
+        sourceView: "code",
     },
     {
         id: "SEC-003",
@@ -209,6 +376,7 @@ const LINE_RULES: LineRule[] = [
         pattern: /\b(?:\$queryRawUnsafe|\$executeRawUnsafe|queryRawUnsafe|executeRawUnsafe)\s*\(/,
         excludePattern: /(^|\/)(test|tests|fixtures?|mocks?|spec)\//i,
         buildMessage: () => "Unsafe raw SQL helper detected; untrusted input can reach the database without parameterization.",
+        sourceView: "code",
     },
     {
         id: "SEC-004",
@@ -219,6 +387,7 @@ const LINE_RULES: LineRule[] = [
         pattern: /dangerouslySetInnerHTML\s*=\s*\{\{/,
         excludePattern: /(^|\/)(test|tests|fixtures?|mocks?|spec)\//i,
         buildMessage: () => "Raw HTML injection sink detected.",
+        sourceView: "code",
     },
     {
         id: "QLT-001",
@@ -229,6 +398,7 @@ const LINE_RULES: LineRule[] = [
         pattern: /console\.log\(/,
         excludePattern: /(bin\/jstar\.js|scripts\/utils\/logger\.ts|setup\.js|test\/)/i,
         buildMessage: () => "console.log left in source can leak noisy or sensitive runtime details.",
+        sourceView: "code",
     },
     {
         id: "QLT-002",
@@ -258,6 +428,15 @@ const FILE_RULES: FileRule[] = [
 
 const CUSTOM_RULES: CustomRule[] = [
     {
+        id: "SEC-001",
+        title: "Hardcoded secret in source",
+        severity: "CRITICAL",
+        category: "SECURITY",
+        recommendation: "Move the credential to environment configuration and rotate the exposed secret.",
+        excludePattern: /(^|\/)(test|tests|fixtures?|mocks?|spec)\//i,
+        scan: (content, normalizedPath) => scanHardcodedSecrets(content, normalizedPath),
+    },
+    {
         id: "SEC-005",
         title: "Server env var referenced in client module",
         severity: "CRITICAL",
@@ -271,11 +450,12 @@ const CUSTOM_RULES: CustomRule[] = [
             }
 
             const findings: AuditFinding[] = [];
-            const lines = content.split("\n");
+            const lines = buildCodeView(content, normalizedPath).split(/\r?\n/);
             const envPattern = /process\.env\.([A-Z0-9_]+)/g;
 
             lines.forEach((line, index) => {
                 let match: RegExpExecArray | null;
+                envPattern.lastIndex = 0;
                 while ((match = envPattern.exec(line)) !== null) {
                     const envName = match[1];
                     if (envName.startsWith("NEXT_PUBLIC_")) {
@@ -377,14 +557,18 @@ export function mapAuditSeverityToReviewSeverity(severity: AuditSeverity): "P0_C
 
 export function scanFileContent(content: string, normalizedPath: string): AuditFinding[] {
     const findings: AuditFinding[] = [];
-    const lines = content.split("\n");
+    const rawLines = content.split(/\r?\n/);
+    const codeLines = buildCodeView(content, normalizedPath).split(/\r?\n/);
 
     for (const rule of LINE_RULES) {
         if (!shouldApplyRule(rule, normalizedPath)) {
             continue;
         }
 
+        const lines = rule.sourceView === "code" ? codeLines : rawLines;
+
         lines.forEach((line, index) => {
+            rule.pattern.lastIndex = 0;
             if (!rule.pattern.test(line)) {
                 return;
             }
