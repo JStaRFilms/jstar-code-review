@@ -29,7 +29,7 @@ function log(msg) {
 
 function printHelp() {
     log(`
-${COLORS.bold}🌟 J-Star Reviewer v3.0.0${COLORS.reset}
+${COLORS.bold}🌟 J-Star Reviewer v3.0.1${COLORS.reset}
 
 ${COLORS.dim}AI-powered code review with local embeddings${COLORS.reset}
 
