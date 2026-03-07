@@ -450,30 +450,35 @@ const CUSTOM_RULES: CustomRule[] = [
             }
 
             const findings: AuditFinding[] = [];
-            const lines = buildCodeView(content, normalizedPath).split(/\r?\n/);
+            const codeView = buildCodeView(content, normalizedPath);
+            const sourceFile = ts.createSourceFile(
+                normalizedPath,
+                content,
+                ts.ScriptTarget.Latest,
+                false,
+                getScriptKind(normalizedPath),
+            );
             const envPattern = /process\.env\.([A-Z0-9_]+)/g;
 
-            lines.forEach((line, index) => {
-                let match: RegExpExecArray | null;
-                envPattern.lastIndex = 0;
-                while ((match = envPattern.exec(line)) !== null) {
-                    const envName = match[1];
-                    if (envName.startsWith("NEXT_PUBLIC_")) {
-                        continue;
-                    }
-                    findings.push({
-                        ruleId: "SEC-005",
-                        title: "Server env var referenced in client module",
-                        severity: "CRITICAL",
-                        category: "SECURITY",
-                        file: normalizedPath,
-                        line: index + 1,
-                        message: `Client component references server-only environment variable "${envName}".`,
-                        recommendation: "Move the access to a server-only boundary or expose a safe NEXT_PUBLIC_ value instead.",
-                        source: "deterministic",
-                    });
+            let match: RegExpExecArray | null;
+            envPattern.lastIndex = 0;
+            while ((match = envPattern.exec(codeView)) !== null) {
+                const envName = match[1];
+                if (envName.startsWith("NEXT_PUBLIC_")) {
+                    continue;
                 }
-            });
+                findings.push({
+                    ruleId: "SEC-005",
+                    title: "Server env var referenced in client module",
+                    severity: "CRITICAL",
+                    category: "SECURITY",
+                    file: normalizedPath,
+                    line: ts.getLineAndCharacterOfPosition(sourceFile, match.index).line + 1,
+                    message: `Client component references server-only environment variable "${envName}".`,
+                    recommendation: "Move the access to a server-only boundary or expose a safe NEXT_PUBLIC_ value instead.",
+                    source: "deterministic",
+                });
+            }
 
             return findings;
         },
@@ -482,6 +487,7 @@ const CUSTOM_RULES: CustomRule[] = [
 
 const AUDIT_IGNORE_FILE = path.join(".jstar", "audit-ignore.json");
 const REQUIRED_GITIGNORE_PATTERNS = [".env", ".env.local", "node_modules", "*.pem", "*.key"];
+const MAX_AUDIT_FILE_SIZE_BYTES = 1024 * 1024;
 
 const SEVERITY_RANK: Record<AuditSeverity, number> = {
     CRITICAL: 0,
@@ -768,14 +774,28 @@ export async function runDeterministicAudit(
         .sort((left, right) => left.localeCompare(right));
 
     const rawFindings: AuditFinding[] = [];
+    let scannedFiles = 0;
 
     for (const filePath of uniqueFiles) {
         const absolutePath = path.resolve(cwd, filePath);
-        if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+        if (!fs.existsSync(absolutePath)) {
+            continue;
+        }
+
+        const fileStats = fs.statSync(absolutePath);
+        if (!fileStats.isFile()) {
+            continue;
+        }
+
+        if (fileStats.size > MAX_AUDIT_FILE_SIZE_BYTES) {
+            Logger.warn(
+                `Skipping deterministic audit for "${filePath}" because it exceeds ${MAX_AUDIT_FILE_SIZE_BYTES} bytes.`,
+            );
             continue;
         }
 
         const content = fs.readFileSync(absolutePath, "utf-8");
+        scannedFiles++;
         rawFindings.push(...scanFileContent(content, filePath));
     }
 
@@ -787,7 +807,7 @@ export async function runDeterministicAudit(
     const { findings, ignoredFindings } = applyIgnores(sortFindings(rawFindings), ignores);
 
     const summary = {
-        filesScanned: uniqueFiles.length,
+        filesScanned: scannedFiles,
         findings: findings.length,
         critical: findings.filter((finding) => finding.severity === "CRITICAL").length,
         high: findings.filter((finding) => finding.severity === "HIGH").length,

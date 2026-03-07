@@ -20,6 +20,10 @@ async function main() {
             "",
         ].join("\n"),
     );
+    fs.writeFileSync(
+        path.join(tempRoot, "src", "oversized.ts"),
+        `export const payload = "${"a".repeat((1024 * 1024) + 32)}";\nprocess.env.INTERNAL_TOKEN;\n`,
+    );
     fs.writeFileSync(path.join(tempRoot, ".env"), "API_KEY=super-secret-value\n");
     fs.writeFileSync(path.join(tempRoot, ".gitignore"), "node_modules\n");
 
@@ -39,6 +43,11 @@ async function main() {
     assert(report.findings.some((finding) => finding.ruleId === "SEC-002"), "Expected eval() finding");
     assert(report.findings.some((finding) => finding.ruleId === "GUARD-002"), "Expected .gitignore gap finding");
     assert(report.findings.some((finding) => finding.ruleId === "GUARD-003"), "Expected tracked secret finding");
+    assert.equal(report.summary.filesScanned, 1, "Oversized code files should be skipped from deterministic scanning");
+    assert(
+        !report.findings.some((finding) => finding.file === "src/oversized.ts"),
+        "Oversized files should not emit deterministic findings",
+    );
 
     fs.writeFileSync(
         path.join(tempRoot, ".jstar", "audit-ignore.json"),

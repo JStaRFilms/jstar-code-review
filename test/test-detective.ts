@@ -150,6 +150,20 @@ const misplacedFinding = scanFileContent(misplacedUseClient, "app/misplaced-use-
 );
 assert.equal(misplacedFinding?.line, 3, 'ARCH-001 should point at the misplaced "use client" directive line');
 
+const commentedClientLeak = scanFileContent(
+    [
+        "/* Multi-line",
+        " * header comment",
+        " */",
+        '"use client";',
+        "",
+        "export const secret = process.env.INTERNAL_TOKEN;",
+        "",
+    ].join("\n"),
+    "app/commented-secret-leak.tsx",
+).find((finding) => finding.ruleId === "SEC-005");
+assert.equal(commentedClientLeak?.line, 6, "SEC-005 should point at the original source line");
+
 const deterministicFixture = fs.readFileSync(path.join(FIXTURES_DIR, "secret-leak.tsx"), "utf-8");
 const outputs = Array.from({ length: 5 }, () =>
     JSON.stringify(scanFileContent(deterministicFixture, "app/secret-leak.tsx")),
