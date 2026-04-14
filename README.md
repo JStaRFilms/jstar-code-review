@@ -1,4 +1,4 @@
-# J-Star Reviewer
+# J-Star Reviewer 
 
 Local-first, context-aware AI code review for any Git-based project.
 
